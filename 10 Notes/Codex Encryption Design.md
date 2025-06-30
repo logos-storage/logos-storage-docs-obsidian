@@ -26,3 +26,4 @@ Some context info:
 
 - [bearssl](https://bearssl.org/)
 - [bearssl Nim bindings](https://github.com/status-im/nim-bearssl)
+- A nice example of using BearSSL encryption API (Arduino) https://github.com/kakopappa/esp8266-aes-cbc-encryption-decryption/blob/main/esp8266-aes-cbc-encryption-decryption.ino
