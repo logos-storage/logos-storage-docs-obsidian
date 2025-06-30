@@ -20,7 +20,7 @@ I would argue that at the moment we should only do something very basic, that is
 We need to choose a [stream cipher](https://en.wikipedia.org/wiki/Stream_cipher). Which one to choose doesn't really matter as long as we don't fuck up the many subtle details. Some natural options:
 
 - something based on the [AES block cipher](https://en.wikipedia.org/wiki/Advanced_Encryption_Standard)
-- [Salsa20](https://en.wikipedia.org/wiki/Salsa20) or ChaCha
+- [Salsa20](https://en.wikipedia.org/wiki/Salsa20) or ChaCha (newer)
 - just `XOR` with Shake or TurboShake (Shake is the SHA3 XOF)
 
 AES is usually a default choice because it's a standard, it's well-known (you don't have to explain the choice), and hardware-accelerated. However, there are many details allowing you to shoot yourself in the foot.
@@ -76,6 +76,8 @@ As weak randomness can have catastrophic consequences, special care should be gi
 A common mitigation strategy is to include additional entropy based for example on the data to encrypt. The disadvantage of this is more computation.
 
 ## A proposal
+
+^b2e265
 
 Based on the above, I have a very simple proposal:
 
