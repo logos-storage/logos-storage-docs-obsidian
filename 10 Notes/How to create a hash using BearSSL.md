@@ -24,7 +24,7 @@ BearSSL also simulates an [OOP interface](https://bearssl.org/oop.html), which c
 ```nim
 import bearssl/hash
 
-proc hash(hashClass: ptr HashClass, data: openArray[byte]): seq[byte] =
+proc hash*(hashClass: ptr HashClass, data: openArray[byte]): seq[byte] =
   var compatCtx = HashCompatContext()
   let buffSize = (hashClass[].desc shr HASHDESC_OUT_OFF) and HASHDESC_OUT_MASK
   result = newSeq[byte](buffSize)
@@ -39,7 +39,10 @@ proc hash(hashClass: ptr HashClass, data: openArray[byte]): seq[byte] =
 Then such a hash function can be conveniently reused for various hashing functions:
 
 ```nim
+import bearssl/hash
 import stew/byteutils
+
+import ./hash
 
 let data = "0123456789abcdef".toBytes
 
@@ -56,3 +59,24 @@ md5Init(md5Ctx)
 echo "Hash out[md5]: ", hash(md5Ctx.vtable, data).toHex
 ```
 
+This last snippet can be further simplified by using a globally defined *vtable* variables from `nim-bearssl`:
+
+```nim
+import bearssl/hash
+import stew/byteutils
+
+import ./hash
+
+let data = "0123456789abcdef".toBytes
+
+var sha256HashCtx = Sha256Context()
+let buff = newSeq[byte](sha256SIZE) # 32 bytes for SHA-256
+sha256Init(sha256HashCtx)
+sha224Update(sha256HashCtx, addr data[0], data.len.uint)
+sha256Out(sha256HashCtx, addr buff[0])
+
+echo "Hash out[sha256]: ", buff.toHex
+echo "Hash out[sha256]: ", hash(addr sha256Vtable, data).toHex
+echo "Hash out[sha1]: ", hash(addr sha1Vtable, data).toHex
+echo "Hash out[md5]: ", hash(addr md5Vtable, data).toHex
+```

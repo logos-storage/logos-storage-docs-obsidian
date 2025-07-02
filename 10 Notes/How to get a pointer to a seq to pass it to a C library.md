@@ -17,5 +17,5 @@ let str = "abcdefghijklmnopqrstuvwxyz"
 sha256Update(ctx, str.cstring, input[i].len.uint)
 ```
 
-Here we use `sha256Update` from [[BearSSL]] library. See [[BearSSL hashing]] for more complete examples.
+Here we use `sha256Update` from [[BearSSL]] library. See [[How to create a hash using BearSSL]] for more complete examples.
 See also [Accessing seq pointer](https://forum.nim-lang.org/t/1489), [Use cstring for C binding](https://forum.nim-lang.org/t/8179), and [Arrays and Sequences in nim](https://forum.nim-lang.org/t/5703) on Nim forum.
