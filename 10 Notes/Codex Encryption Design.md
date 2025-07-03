@@ -99,11 +99,12 @@ let blockIndexArray = toBytes(blockIndex, bigEndian)
 
 const KEY_SIZE = 24 # 192 bits for AES-192
 const IV_SIZE = 16  # 128 bits
+const DefaultBlockSize* = uint 1024 * 64 # as used in Codex
 
 let keyForBlock = hash(addr sha256Vtable, masterKey & @[byte(0x01)] & blockIndexArray.toSeq)[0 ..< KEY_SIZE]
 let ivForBlock = hash(addr sha256Vtable, masterKey & @[byte(0x02)] & blockIndexArray.toSeq)[0 ..< IV_SIZE]
 
-var plaintext = newSeqWith(IV_SIZE, Rng.instance.rand(uint8.high).byte)
+var plaintext = newSeqWith(DefaultBlockSize.int, Rng.instance.rand(uint8.high).byte)
 
 let key = keyForBlock
 let ive = ivForBlock
