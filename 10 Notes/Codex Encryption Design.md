@@ -29,43 +29,10 @@ For some introduction and examples on BearSSL, please consult:
 - [[How to create a hash using BearSSL]]
 - [[How to encrypt and decrypt content using symmetric encryption in BearSSL]]
 
-Before document design considerations for the content encryption in the Codex client, let's first see how to use BearSSL primitives to encrypt and decrypt some content:
+In Codex, we use a slightly modified AES-CBC mode of operation:
 
-```nim
-import std/sequtils
-import bearssl/blockx
-import stew/byteutils
-
-import ./rng
-
-var plaintext = "0123456789abcdef".toBytes
-echo "plaintext: ", plaintext.toHex
-
-let key = newSeqWith(16, Rng.instance.rand(uint8.high).byte)
-let ive = newSeqWith(16, Rng.instance.rand(uint8.high).byte)
-let ivd = ive
-
-echo "ive: ", ive.toHex
-
-var encCtx: AesBigCbcencKeys
-aesBigCbcencInit(encCtx, addr key[0], 16.uint)
-aesBigCbcencRun(encCtx, addr ive[0], addr plaintext[0], 16.uint)
-echo "Encrypted: ", plaintext.toHex
-
-echo "ivd: ", ivd.toHex
-
-var decCtx: AesBigCbcdecKeys
-aesBigCbcdecInit(decCtx, addr key[0], 16.uint)
-aesBigCbcdecRun(decCtx, addr ivd[0], addr plaintext[0], 16.uint)
-echo "Decrypted: ", plaintext.toHex
-```
-
-Important to notice here is that `aesBigCbcencRun` will mutate the provided initialization vector `IV` so that it is ready to use for the subsequent chunk of data - a classical CBC mode for AES. Yet, for Codex, we use slightly modified scheme as already shown above.
-
-For codex:
-
-1. we first generate a `MASTER_KEY` - which will be returned to the user
-2. from the `MASTER_KEY`, for each block, we derive the corresponding block level encryption key `blockKEY` and block level initialization vector `blockIV` as shown in the proposal above
+1. we first generate a random `MASTER_KEY` - this key will be returned to the user,
+2. from the `MASTER_KEY`, for each block, we derive the corresponding block level encryption key `blockKEY` and block level initialization vector `blockIV` as shown in the proposal above,
 3. using the derived `blockKEY` and `blockIV`, we then encrypt the block using the BearSSL encryption primitives as demonstrated above.
 
 As we see above, the block index is used in the process of the key and initialization vector derivation. For this reason we also need to remember to convert the block index to a byte representation - we use big-endian ordering. For this conversion a very simple function can be used:
@@ -97,12 +64,15 @@ let masterKey = newSeqWith(32, Rng.instance.rand(uint8.high).byte)
 let blockIndex = 1.uint32  
 let blockIndexArray = toBytes(blockIndex, bigEndian)
 
-const KEY_SIZE = 24 # 192 bits for AES-192
-const IV_SIZE = 16  # 128 bits
-const DefaultBlockSize* = uint 1024 * 64 # as used in Codex
+const 
+  KEY_SIZE = 24 # 192 bits for AES-192
+  IV_SIZE = 16  # 128 bits
+  KeyDerivationIdentifier = "aes192_block_key".toBytes
+  IvDerivationIdentifier = "aes192_block_iv".toBytes
+  DefaultBlockSize* = uint 1024 * 64 # as used in Codex
 
-let keyForBlock = hash(addr sha256Vtable, masterKey & @[byte(0x01)] & blockIndexArray.toSeq)[0 ..< KEY_SIZE]
-let ivForBlock = hash(addr sha256Vtable, masterKey & @[byte(0x02)] & blockIndexArray.toSeq)[0 ..< IV_SIZE]
+let keyForBlock = hash(addr sha256Vtable, masterKey & KeyDerivationIdentifier & blockIndexArray.toSeq)[0 ..< KEY_SIZE]
+let ivForBlock = hash(addr sha256Vtable, masterKey & IvDerivationIdentifier & blockIndexArray.toSeq)[0 ..< IV_SIZE]
 
 var plaintext = newSeqWith(DefaultBlockSize.int, Rng.instance.rand(uint8.high).byte)
 
@@ -113,7 +83,7 @@ let encBuffer = plaintext
 # encryption
 var encCtx: AesBigCbcencKeys
 aesBigCbcencInit(encCtx, addr key[0], key.len.uint)
-aesBigCbcencRun(encCtx, addr ive[0], addr encBuffer[0], ive.len.uint)
+aesBigCbcencRun(encCtx, addr ive[0], addr encBuffer[0], encBuffer.len.uint)
 
 assert encBuffer != plaintext, "Encryption failed, output should differ from input!"
 
@@ -122,17 +92,40 @@ let ivd = ivForBlock
 
 var decCtx: AesBigCbcdecKeys
 aesBigCbcdecInit(decCtx, addr key[0], key.len.uint)
-aesBigCbcdecRun(decCtx, addr ivd[0], addr encBuffer[0], ivd.len.uint)
+aesBigCbcdecRun(decCtx, addr ivd[0], addr encBuffer[0], encBuffer.len.uint)
 
 assert encBuffer == plaintext, "Decryption failed, output should match input!"
 ```
 
 where `rng` and `hash` are defined as shown in [[How to generate a random number using BearSSL]] and [[How to create a hash using BearSSL]].
 
-In a similar way we will proceed with other block.
+In a similar way we will proceed with the following, successive blocks.
 
-More data to come.
+### API
 
+All data uploaded to Codex will, be default, be encrypted.
+
+The standard upload API - `/api/codex/v1/data`  - after successful upload, returns the content identifier of the uploaded content, followed by the hex encoded master encryption key, separated by a single comma character `:`, eg:
+
+```bash
+curl -X POST \
+  http://localhost:8001/api/codex/v1/data \
+  -H 'Content-Type: application/octet-stream' \
+  -H 'Content-Disposition: filename="enc.txt"' \
+  -w '\n' \
+  -T enc.txt
+zDvZRwzm22eSYNdLBuNHVi7jSTR2a4n48yy4Ur9qws4vHV6madiz:541cc266b2ef426486cd981f2d7429347c68113bda2a80d21c9f18e250bfdaff
+```
+
+When downloading, the user is allowed to either retrieve the encrypted content, and then use an external utility (to be provided) to decrypt it, or the user can provide the encryption master key, which then will be used by the Codex client to decrypt the content, which then will be returned to the user:
+
+```bash
+export CID="zDvZRwzm22eSYNdLBuNHVi7jSTR2a4n48yy4Ur9qws4vHV6madiz"
+export KEY="541cc266b2ef426486cd981f2d7429347c68113bda2a80d21c9f18e250bfdaff"
+curl "http://localhost:8001/api/codex/v1/data/${CID}/network/stream?key=${KEY}" -o "dec.txt"
+```
+
+Notice that when no encryption key is provided, the returned content size will always be multiply of the block size.
 ### Links
 
 - [bearssl](https://bearssl.org/)
