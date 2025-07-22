@@ -4,7 +4,7 @@
 #### Project Use Cases
 
 * [[Codex Use Cases - Status]]
-* [[Codex Use Cases - Waku]]
+* [Codex Use Cases - Waku](https://github.com/waku-org/pm/pull/328)
 #### Misc
 
 * [[Codex Use Cases - Václav's Thoughts]]

@@ -3,7 +3,7 @@ From the initial chat with Volo, we got two main use cases, which might actually
 
 * overcoming Waku message size limitations for long messages (why can't they just break those up and send multiple messages though?);
 * implementing file sharing, with images (and I suppose audio?) being the main use case; i.e., that gives us a ballpark in content size;
-* Jacek
+* Jacek mentioned they use bittorrent in some part of their infrastructure, which we could replace with Codex.
 ### Requirements
 
 **Codex has to run on mobile.** This might be a big deal as mobile networks are notoriously unsuitable to P2P software. Good news is that we got Waku and they seem to have worked around this, so we should start by examining their solution.
