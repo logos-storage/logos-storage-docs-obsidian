@@ -42,7 +42,7 @@ jobs:
       - name: Build Quartz site
         run: |
           cd quartz
-          cp -r ../* content/
+          cp -r ../* content/ || true
           rm -rf content/.git content/.github content/quartz
           npx quartz build
         env:
