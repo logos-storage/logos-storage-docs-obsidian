@@ -1,18 +1,19 @@
-## Codex Documentation Vault
+This is our documentation repository. All documents that need to be recorded and available to the whole team have to end up here. This repository is also an [Obsidian](https://obsidian.md) vault. As much as you can jump directly to a specific Markdown file, it is strongly advised that you use Obsidian to update existing docs and to create and link new ones. Otherwise you may break the linking and cause problems to other users of this repo.
 
-This is our documentation. An [Obsidian](https://obsidian.md) vault containing
-all Codex-related docs.
+### Quick start
 
-Some featured documents:
+First, clone this repo to a local directory on your computer (e.g. `~/Documents/obsidian/codex):
 
-- [[Codex Encryption Basis]]
-- [[How to build Codex on Ubuntu 24 (VM)]]
-- [[Compilation error when using `auto` types and Questionable]]
+```bash
+git clone git@github.com:codex-storage/codex-docs-obsidian.git
+```
 
-### Obsidian
+Then install [Obsidian App](https://obsidian.md/download) (use the best method suitable for you OS).
 
-This repository is a complete [Obsidian](https://obsidian.md) vault. You can open it on your computer in the [Obsidian App](https://obsidian.md/download) and have a searchable Codex documentation vault under your full control. Comparing to bloated [Notion](https://www.notion.so), which is a great tool for procrastination rather than a tool for capturing knowledge, Obsidian let's you capture the knowledge quickly and with excellent overview of how different topic connect to each other. And in the end - all are just Markdown files.
+Finally, open the cloned folder (a vault) in Obsidian.
 
-The vault includes the `.obsidian` folder, but does not include publishing settings, and workspace configuration as those are personal and change every time you open the vault. If you want to have the full control over your Obsidian look and full, your own [[Hot-Keys|hot-keys]], [[Installed plugins|plugins]], etc, your can delete `.obsidian` or replace it with your own.
+Now you have a searchable Codex documentation vault under your full control. Everything you do in Obsidian remains private as long as you do not commit and push your changes to GitHub. Our `.gitignore` keeps some of the vault file ignored, meaning they will stay only visible to your Obsidian installation. For instance, the publishing settings and the workspace configuration (kept in the `.obsidian` folder) are excluded from GitHub syncing, as those are personal and change every time you open the vault. You can read more about what is ignored in [[Ignored Obsidian Vault files]].
 
-To learn more about Obsidian and *Knowledge Management Systems*, please also check [[Short Introduction to Obsidian]].
+> To get some background about Obsidian and *Knowledge Management Systems*, please check [[Short Introduction to Obsidian]]. We also have some video tutorials: see [[Using Codex Obsidian Vault Video Tutorials]].
+
+Now, when you have everything up and running, learn a bit more about our documentation setup and how to take full advantage of it. See [[Codex Documentation Setup]] in - of course - Obsidian.
