@@ -13,3 +13,5 @@ From those discussions:
 - https://github.com/SirNickolas/asyncIters-Nim
 - [asyncIters-Nim](https://github.com/SirNickolas/asyncIters-Nim)
 - [Why isn’t `chronosInternalRetFuture` gensymmed?](https://github.com/status-im/nim-chronos/issues/368)
+
+The temporary working name for the new async iterator nim package will be `nim-async-iterators`.
