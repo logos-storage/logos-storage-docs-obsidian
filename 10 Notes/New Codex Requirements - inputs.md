@@ -5,7 +5,7 @@ In gathering new requirements for Codex, we have the following inputs we can ref
 - [Express Codex requirements - waku-org/pm/pull/328](https://github.com/waku-org/pm/pull/328)
 - [docs(codex): add Codex requirements - status-im/status-desktop/pull/18483](https://github.com/status-im/status-desktop/pull/18483)
 
-Then we have a high level spec format: [https://hackmd.io/@codex-storage/rkbytlbOxg](https://hackmd.io/@codex-storage/rkbytlbOxg) and a reference of how polished spec *may* look like: [https://rfc.vac.dev/waku](https://rfc.vac.dev/waku)
+Then we have a high level spec format: [https://hackmd.io/@codex-storage/rkbytlbOxg](https://hackmd.io/@codex-storage/rkbytlbOxg) and a reference of how polished spec *may* look like: [https://rfc.vac.dev/waku](https://rfc.vac.dev/waku). During a recent town-hall, Waku presented their [mix protocol](standards/core/mix.md), which probably can also be used as an example together with their [other specs in that same repo](https://github.com/waku-org/specs/tree/master/standards/core). 
 
 And last but not least, our new board where you can see who is working on which spec currently: [https://github.com/orgs/codex-storage/projects/6/views/1](https://github.com/orgs/codex-storage/projects/6/views/1)
 
