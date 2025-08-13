@@ -2,12 +2,7 @@
 
 ## 1. Purpose and Scope
 
-The Purchase module manages the lifecycle of a storage agreement between a client and a host in Codex. Its main responsibilities are to:
-
-* Create new purchases from a `StorageRequest`.
-* Initialize them in the correct starting state `pending` for new purchases, `unknown` for recovered ones.
-* Keep accurate tracking so the current state of a purchase is always known and can be queried at any time.
-* Determine the terminal state based on the request state returned by the `marketplace`.
+The Purchase module manages the lifecycle of a storage agreement between a client and a host in Codex. It ensures that each purchase is correctly initialized, tracked, and completed according to the state of its corresponding `StorageRequest` in the marketplace.
 
 Purchases are implemented as a state machine that progresses through defined states until reaching a deterministic terminal state (`finished`, `cancelled`, `failed`, or `errored`).
 
