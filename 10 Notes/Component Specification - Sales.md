@@ -120,7 +120,7 @@ Slot queue schedules slot work and instantiates one `SalesAgent` per item with b
 - Accepts `(requestId, slotIndex, …)` items and orders them by priority (described below)
 - Spawns one `SalesAgent` for each dequeued item, in other words, one item for one agent
 - Caps concurrent agents to `maxWorkers`
-- Supports pause/resume and graceful start/stop (`running`/`unpaused`)
+- Supports pause/resume
 - Allows controlled requeue when an agent finishes with `reprocessSlot`
 
 ### 5.2.1 Slot ordering
