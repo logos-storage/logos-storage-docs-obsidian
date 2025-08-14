@@ -265,11 +265,11 @@ All states move to `SaleErrored` if an error is raised.
 
 - Ensure that the node hosting the slot frees the slot
 - Call `onClear` hook
-- Call `onCleanUp` hookwith the current collateral
+- Call `onCleanUp` hook with the current collateral
 
 ### 5.5.13 `SaleIgnored`
 
-- Call `onCleanUp` hookwith the current collateral
+- Call `onCleanUp` hook with the current collateral
 
 ### 5.5.14 `SaleErrored`
 
