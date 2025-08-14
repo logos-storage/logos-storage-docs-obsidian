@@ -1,7 +1,7 @@
 # Codex DHT - Component specification
 ## 1. Purpose and Scope
 ### What the component does.
-The Codex DHT is a modified clone of the DiscV5 DHT. It has been modified in order to store Codex's signed-peer-record (SPR) entries, as well as content identifiers (CID) for each host. This allows users of the Codex DHT to publish their connection information formatted as an SPR. As well as information regarding the datasets they are storing. CIDs are converted into NodeId values, which are used as keys in the DHT. The value of each DHT entry is a variable sized array of SPRs.
+The Codex DHT is a modified clone of the DiscV5 DHT. The upstream library is https://github.com/status-im/nim-eth/tree/master/eth/p2p/discoveryv5 which is based on Ethereum's discv5 specification: https://github.com/ethereum/devp2p/blob/master/discv5/discv5.md. It has been modified in order to store Codex's signed-peer-record (SPR) entries, as well as content identifiers (CID) for each host. This allows users of the Codex DHT to publish their connection information formatted as an SPR, as well as information regarding the datasets they are storing. CIDs are converted into NodeId values, which are used as keys in the DHT. The value of each DHT entry is a variable sized array of SPRs.
 The Codex DHT is limited to DHT specific operations: publishing and looking up of DHT records. DHT records will automatically expire and disappear from the network. It is the responsibility of the user to periodically re-publish relevant records.
 
 ## 2. Interfaces
