@@ -3,9 +3,9 @@
 ## 1. Purpose and Scope
 
 ### Purpose/Motivation
-In decentralized storage networks, such as Codex one of the main challenges is ensuring durability and availablity of the data stored by storage providers (SP). To achieve durability, random sampling (along with erasure coding) is used to provide probabilistic guarantees while touching only a tiny fraction of the stored data per challenge. 
+In decentralized storage networks, such as Codex one of the main challenges is ensuring durability and availability of the data stored by storage providers (SP). To achieve durability, random sampling (along with erasure coding) is used to provide probabilistic guarantees while touching only a tiny fraction of the stored data per challenge. 
 
-The primary purpose of the proving module is to provide a succinct, publicly verifiable way to check that an SP still holds the data it committed to. It samples cells from the stored slot, and turns those samples and Merkle paths into a small Groth16 proof that ties back to the published dataset root. The marketplace contract verifies this proof on-chain and uses the result to manage incentives e.g. payments and slashing. 
+The primary purpose of the proving module is to provide a succinct, publicly verifiable way to check that an SP still holds the data it committed to. It samples cells from the stored slot, and turns those samples and Merkle paths into a small Groth16 proof that ties back to the published dataset root (commitment). The marketplace contract verifies this proof on-chain and uses the result to manage incentives e.g. payments and slashing. 
 
 ### Scope
 The scope of this specification document is limited to the proving module which consists of the following functionalities:
@@ -38,34 +38,22 @@ The Proving module relies on `blockStore` for storage and `SlotsBuilder` to buil
 ## 2. Interfaces
 
 ### Component Overview
-The Prover module consists of three main components:
+The prover module consists of three main sub-components:
 
-1. **Builder**: turns raw bytes into zk-SNARK-friendly commitments.
-2. **Sampler**: derives random sample indices from public entropy and slot commitments, and then generates the proof input. 
-3. **Prover**: produces succinct ZK proofs for valid proof inputs, and verifies such proofs. 
-
+1. **Sampler**: derives random sample indices from public entropy and slot commitments, and then generates the proof input. 
+2. **Prover**: produces succinct ZK proofs for valid proof inputs, and verifies such proofs. 
+3. **Circuit**: The zero-knowledge circuit that defines the logic for sampling, cell hashing, Merkle tree membership checks.
 
 ### Component Interfaces 
-Below are the main interfaces for each component. The interfaces below omit getters, setters, and internal functions, instead it focuses on main functions needed.
+Below are the main interfaces for each sub-component. The interfaces below omit getters, setters, and internal functions, instead it focuses on main functions needed.
 `T` denotes the Merkle tree type (supports all Merkle tree functionality).
 `H` denotes the digest/hash element type (e.g., Poseidon2Hash) used for leaves, paths, and roots.
-
-
-**Builder interfaces:**
-
-| Interface         | Description                                                                                                                                                         | Input                                                                                                | Output              |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------- |
-| `new`             | Create a new `SlotsBuilder` instance.                                                                                                                               | `blockStore: BlockStore`, `manifest: Manifest`, `strategy: IndexingStrategyType`, `cellSize: NBytes` | `SlotsBuilder[T,H]` |
-| `buildBlockTree`  | Build the block Merkle tree and return the block data and the tree.                                                                                                 | `blkIdx: Natural`, `slotPos: Natural`                                                                | `(seq[byte], T)`    |
-| `buildSlotTree`   | Build the slot Merkle tree from the block-tree roots and return the tree. Calls `buildBlockTree` internally.                                                        | `slotIndex: Natural`                                                                                 | `T`                 |
-| `buildVerifyTree` | Build the verification (dataset) Merkle tree from slot roots.                                                                                                       | `slotRoots: openArray[H]`                                                                            | `T`                 |
-| `buildSlots`      | Build all slot trees (with `buildSlotTree` ) in the dataset and store their proofs in the `BlockStore`. Builds the dataset verification tree via `buildVerifyTree`. | —                                                                                                    | `void`              |
 
 **Sampler interfaces:**
 
 | Interface       | Description                                                                            | Input                                                                    | Output             |
 | --------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------ |
-| `new`           | Construct a `DataSampler` for a specific slot index.                                   | `index: Natural`, `blockStore: BlockStore`, `builder: SlotsBuilder[T,H]` | `DataSampler[T,H]` |
+| `new[T,H]`      | Construct a `DataSampler` for a specific slot index.                                   | `index: Natural`, `blockStore: BlockStore`, `builder: SlotsBuilder[T,H]` | `DataSampler[T,H]` |
 | `getSample`     | Retrieve one sampled cell and its Merkle path(s) for a given slot.                     | `cellIdx: int`, `slotTreeCid: Cid`, `slotRoot: H`                        | `Sample[H]`        |
 | `getProofInput` | Generate the full proof inputs for the proving circuit (calls `getSample` internally). | `entropy: ProofChallenge`, `nSamples: Natural`                           | `ProofInputs[H]`   |
 
@@ -77,17 +65,39 @@ Below are the main interfaces for each component. The interfaces below omit gett
 | `prove`   | Produce a succinct proof for the given slot and entropy.              | `slotIdx: int`, `manifest: Manifest`, `entropy: ProofChallenge`  | `(proofInputs, proof)` |
 | `verify`  | Verify a proof against its public inputs.                             | `proof: AnyProof`, `proofInputs: AnyProofInputs`                 | `bool`                 |
 
+**Circuit interfaces:**
+
+| Template                 | Description                                                                                                                                                                  | Parameters                                                              | **Inputs (signals)**                                                                                                                                                                            | **Outputs (signals)** |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| `SampleAndProve`         | Main component in the circuit. Verifies `nSamples` cells (`cell->block->slot`) and the `slot->dataset` path, binding the proof to `dataSetRoot`, `slotIndex`, and `entropy`. | `maxDepth, maxLog2NSlots, blockTreeDepth, nFieldElemsPerCell, nSamples` | `entropy`, `dataSetRoot`, `slotIndex`, `slotRoot`, `nCellsPerSlot`, `nSlotsPerDataSet`, `slotProof[maxLog2NSlots]`, `cellData[nSamples][nFieldElemsPerCell]`, `merklePaths[nSamples][maxDepth]` | -                     |
+| `ProveSingleCell`        | Verifies one sampled cell: hashes `cellData` with Poseidon2 (rate=2) and checks the concatenated Merkle path up to `slotRoot`.                                               | `nFieldElemsPerCell, botDepth, maxDepth`                                | `slotRoot`, `data[nFieldElemsPerCell]`, `lastBits[maxDepth]`, `indexBits[maxDepth]`, `maskBits[maxDepth+1]`, `merklePath[maxDepth]`                                                             | -                     |
+| `RootFromMerklePath`     | Reconstructs a Merkle root from a leaf and path using `KeyedCompression`.                                                                                                    | `maxDepth`                                                              | `leaf`, `pathBits[maxDepth]`, `lastBits[maxDepth]`, `maskBits[maxDepth+1]`, `merklePath[maxDepth]`                                                                                              | `recRoot`             |
+| `CalculateCellIndexBits` | Derives the index bits for a sampled cell from `(entropy, slotRoot, counter)`, masked by `cellIndexBitMask`.                                                                 | `maxLog2N`                                                              | `entropy`, `slotRoot`, `counter`, `cellIndexBitMask[maxLog2N]`                                                                                                                                  | `indexBits[maxLog2N]` |
+
+
+**Circuit Utility Templates**
+
+| Template               | Description                                                                                             | Parameters                           | **Inputs (signals)** | **Outputs (signals)**         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------ | -------------------- | ----------------------------- |
+| `Poseidon2_hash_rate2` | Poseidon2 fixed‑length hash (rate = 2). Used for hashing cell field‑elements.                           | `n`                                  | `inp[n]`             | `out`                         |
+| `PoseidonSponge`       | Generic Poseidon2 sponge (absorb/squeeze).                                                              | `t, capacity, input_len, output_len` | `inp[input_len]`     | `out[output_len]`             |
+| `KeyedCompression`     | Keyed 2->1 compression where $key \in \{0,1,2,3\}$ .                                                    | -                                    | `key`, `inp[2]`      | `out`                         |
+| `ExtractLowerBits`     | Extracts the lower `n` bits of `inp` (LSB‑first).                                                       | `n`                                  | `inp`                | `out[n]`                      |
+| `Log2`                 | Checks `inp == 2^out` with `0 < out <= n`. Also emits a mask vector with ones for indices `< out`.      | `n`                                  | `inp`                | `out`, `mask[n+1]`            |
+| `CeilingLog2`          | Computes `ceil(log2(inp))` and returns the bit‑decomposition and a mask.                                | `n`                                  | `inp`                | `out`, `bits[n]`, `mask[n+1]` |
+| `BinaryCompare`        | Compares two n‑bit numbers `A` and `B` (LSB‑first); outputs `-1` if `A<B`, `0` if equal, `+1` if `A>B`. | `n`                                  | `A[n]`, `B[n]`       | `out`                         |
+
 ## 3. Functional Requirements
 
 **Data Commitment**
-- Build slot commitments: Construct `cell -> block -> slot` Merkle trees for each slot from locally stored bytes using Poseidon2 (cell hashing) and keyed compression. 
-- Build dataset commitment: Construct `slot -> dataset` verification tree.  
-- Proof material: retrieve cell data (and optionally proofs) from the `BlockStore`.
+- Fetch existing slot commitments using `BlockStore` and `SlotsBuilder`:  `cell -> block -> slot` Merkle trees for each slot in the locally stored dataset. 
+- Fetch dataset commitment: `slot -> dataset` verification tree root.  
+- Proof material: retrieve cell data (as field elements).
 
 **Sampling**
-- checks for marketplace challenges per slot. 
-- Deterministic sampling: Derive `nSamples` cell indices for the `slotIndex` from `(entropy, slotRoot)`. 
-- For each sampled cell, obtain/fetch: `cellData` (as field elements) and Merkle paths (all `cell -> block -> slot -> dataset`)
+- Checks for marketplace challenges per slot. 
+- Random sampling: Derive `nSamples` cell indices for the `slotIndex` from `(entropy, slotRoot)`. 
+- For each sampled cell, fetch: `cellData` (as field elements) and Merkle paths (all `cell -> block -> slot -> dataset`)
 - Generate `ProofInputs` containing the public inputs (`datasetRoot`, `slotIndex`, `entropy`) and private witness (`cellData`, `slotRoot`, `MerklePaths`).
 
 **Proof Generation**
@@ -110,21 +120,16 @@ Below are the main interfaces for each component. The interfaces below omit gett
 ## 5. Internal Behavior
 
 ### High-level Overview 
-At a high level, the proving module contains three components each with specific roles:
+At a high level, the proving module contains three components: Sampler, Prover, and ZK Circuit, each with specific roles. The flow consists of the following steps:
 
-- **Builder**: Constructs the dataset’s Merkle tree commitment from the stored dataset (fetched using `BlockStore` and the `Manifest`). It generates the dataset-level `verificationTree` (`datasetRoot` and `slot -> dataset` paths) and, for each block a Merkle tree with `cell -> block` paths.
-- **Sampler** takes a challenge `(slotIndex, entropy, nSamples)` and maps it to cell indices within that slot. For every sampled cell, it fetches the `cellData` and concatenates the necessary Merkle paths: `cell -> block`, `block -> slot`, and `slot -> dataset` (from the `BlockStore`).
-- **Prover** takes `ProofInputs` and asks the proving system backend (Groth16) to produce a succinct proof. Verification can be done on-chain or off-chain against the same inputs.
-
-The flow consists of the following steps:
-1. Data Commitment
-2. Sampling
-3. Generating a ZK Proof
+- **1. Data Commitment**: The proving module requires an initial commitment to the stored data in order to allow the verifier to verify the proofs against it.  This initial commitment is constructed using the `SlotsBuilder`. The commitment used in Codex is the Merkle root of the dataset tree and slot tree.
+- **2. Sample:** take a challenge `(slotIndex, entropy, nSamples)` and map it to cell indices within that slot. For every sampled cell, fetch the `cellData` and concatenates the necessary Merkle paths: `cell -> block`, `block -> slot`, and `slot -> dataset` (from the `BlockStore` and `SlotsBuilder`).
+- **3. Prove:** take `ProofInputs` and asks the proving system backend (Groth16) to produce a succinct proof. The backend proving system using the ZK circuit logic to create the proof. Verification can be done on-chain or off-chain against the same inputs.
 
 ### Flow
 
 **1. Data Commitment**
-In Codex, a dataset is split into `numSlots` slots which are the ones sampled. Each slot is split into `nCells` fixed-size cells. Since networking operates on blocks, cells are combined to form blocks where each block contains `BLOCKSIZE/CELLSIZE` cells. The following descibes how raw bytes become commitments in Codex (cells -> blocks -> slots -> dataset):
+In Codex, a dataset is split into `numSlots` slots which are the ones sampled. Each slot is split into `nCells` fixed-size cells. Since networking operates on blocks, cells are combined to form blocks where each block contains `BLOCKSIZE/CELLSIZE` cells. The following describes how raw bytes become commitments in Codex (cells -> blocks -> slots -> dataset):
 
 ![[data_merkle_commit.png]]
 
@@ -166,7 +171,7 @@ Special cases:
 - **Merkle Paths** need **only sibling hashes**: left/right direction is inferred from the binary decomposition of the leaf index, so you don’t transmit direction flags.
 
 
-**2. Sampling**
+**2. Sample**
 
 **Sampling request**
 Sampling begins when a proof is requested containing the entropy (also called `ProofChallenge`). A `DataSampler` instance is created for a specific slot and then used to produce `Sample` records (see the `Sample` type in the Data Models section).
@@ -205,7 +210,7 @@ The `DataSampler` collects the `ProofInputs` required for the zk proof system wh
 
 These `ProofInputs` are then passed to the prover to generate the succinct ZK proof.
 
-**3. Generating a ZK proof**
+**3. Prove**
 To produce a zk storage proof, Codex uses a pluggable proving backend. In practice we use Groth16 over BN254 (altbn128) with circuits written in Circom. The `Prover` with`ProofInputs` calls the backend to create a succinct proof, and (optionally) verifies it locally before submission. The prover require the following dependencies:
 
 - **Circuits (Circom)**: [codex-storage-proofs-circuits](https://github.com/codex-storage/codex-storage-proofs-circuits)  
@@ -267,6 +272,7 @@ The proving module relies on the components and libraries below.
 - **Marketplace / Storage Contracts**: request/proof events.
 - **BlockStore**: Content-addressed store used by the proving module to read raw block bytes and store/fetch Merkle proofs (paths).
 - **Manifest**: Dataset metadata and commitment references (CIDs) required to construct trees.
+- **SlotsBuilder**: Produces the Merkle commitments which includes per-slot `slotRoot` and the dataset-level `datasetRoot`. Stores proofs/MerklePaths to the BlockStore. The prover fetches these via the Manifest.
 - **Merkle Tree and Hash Function**: 
     - Codex Safe Merkle tree implementation.
     - Poseidon2 sponge for cell hashing.
@@ -279,7 +285,7 @@ The proving module relies on the components and libraries below.
 
 ## 7. Data Models
 ### Builder 
-```Nim
+```nim
 SlotsBuilder*[T, H] = ref object of RootObj
   store: BlockStore
   manifest: Manifest # current manifest
@@ -293,34 +299,34 @@ SlotsBuilder*[T, H] = ref object of RootObj
   emptyDigestTree: T # empty digest tree for empty blocks
 ```
 ### Sampler 
-```Nim
+```nim
 DataSampler*[T, H] = ref object of RootObj
   index: Natural
   blockStore: BlockStore
   builder: SlotsBuilder[T, H]
 ```
 ### Prover
-```Nim
+```nim
 Prover* = ref object of RootObj
     backend: AnyBackend
     store: BlockStore
     nSamples: int
 ```
 ### Sample
-```Nim
+```nim
   Sample*[H] = object
     cellData*: seq[H]
     merklePaths*: seq[H]
 ```
 ### Public Input
-```Nim
+```nim
   PublicInputs*[H] = object
     slotIndex*: int
     datasetRoot*: H
     entropy*: H
 ```
 ### Proof Input
-```Nim
+```nim
   ProofInputs*[H] = object
     entropy*: H
     datasetRoot*: H
@@ -331,11 +337,54 @@ Prover* = ref object of RootObj
     slotProof*: seq[H]
     samples*: seq[Sample[H]]
 ```
+
+```nim
+  CircomCompat* = object
+    slotDepth: int # max depth of the slot tree
+    datasetDepth: int # max depth of dataset  tree
+    blkDepth: int # depth of the block merkle tree (pow2 for now)
+    cellElms: int # number of field elements per cell
+    numSamples: int # number of samples per slot
+    r1csPath: string # path to the r1cs file
+    wasmPath: string # path to the wasm file
+    zkeyPath: string # path to the zkey file
+    backendCfg: ptr CircomBn254Cfg
+    vkp*: ptr CircomKey
+```
+
 ### Proof
 ```rust
 pub struct Proof {
     pub a: G1,
     pub b: G2,
     pub c: G1,
+}
+```
+
+**G1**
+```rust
+pub struct G1 {
+    pub x: [u8; 32],
+    pub y: [u8; 32],
+}
+```
+
+**G2**
+```rust
+pub struct G2 {
+    pub x: [[u8; 32]; 2],
+    pub y: [[u8; 32]; 2],
+}
+```
+
+**Verifying Key**
+```rust
+pub struct VerifyingKey {
+    pub alpha1: G1,
+    pub beta2: G2,
+    pub gamma2: G2,
+    pub delta2: G2,
+    pub ic: *const G1,
+    pub ic_len: usize,
 }
 ```
