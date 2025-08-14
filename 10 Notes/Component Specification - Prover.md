@@ -5,18 +5,17 @@
 ### Purpose/Motivation
 In decentralized storage networks, such as Codex one of the main challenges is ensuring durability and availablity of the data stored by storage providers (SP). To achieve durability, random sampling (along with erasure coding) is used to provide probabilistic guarantees while touching only a tiny fraction of the stored data per challenge. 
 
-The primary purpose of the Proving module is to provide a cheap, publicly verifiable way to check that an SP still holds the data it committed to. It watches the marketplace to check whether proofs are required, samples cells from the stored slot, and turns those samples and Merkle paths into a small Groth16 proof that ties back to the published dataset root. The marketplace contract verifies this proof on-chain and uses the result to manage incentives e.g. payments and slashing. 
+The primary purpose of the proving module is to provide a succinct, publicly verifiable way to check that an SP still holds the data it committed to. It samples cells from the stored slot, and turns those samples and Merkle paths into a small Groth16 proof that ties back to the published dataset root. The marketplace contract verifies this proof on-chain and uses the result to manage incentives e.g. payments and slashing. 
 
 ### Scope
 The scope of this specification document is limited to the proving module which consists of the following functionalities:
 
-- Builds the initial commitment to the stored data.
 - Checks for storage proof requests.
 - Samples cells from a slot in the stored dataset and constructs Merkle proofs.
 - Generates zero-knowledge proofs for randomly selected cells in the stored slots.
 - Submits proofs to verifier in the network (the on-chain marketplace smart contract).
 
-The Proving module does **not** handle the storage of dataset. Storage is handled by the blockStore which the prover uses to query the data. Additionally, this document doesn't specify the incentives involved, such as enforcing storage provider (SP) behavior with collateral-backed incentives and slashing for missed or invalid proofs. This is outside the scope of this specification and it is handled by the marketplace logic.
+The Proving module relies on `blockStore` for storage and `SlotsBuilder` to build initial commitments to the stored data. Additionally, this document doesn't specify the incentives involved (collateral and slashing), which is handled by the marketplace logic.
 
 ### Terminology
 
@@ -72,11 +71,11 @@ Below are the main interfaces for each component. The interfaces below omit gett
 
 **Prover interfaces:**
 
-| Interface | Description | Input | Output |
-|---|---|---|---|
-| `new` | Construct a `Prover` with a block store and the backend proof system. | `blockStore: BlockStore`, `backend: AnyBackend`, `nSamples: int` | `Prover` |
-| `prove` | Produce a succinct proof for the given slot and entropy. | `slotIdx: int`, `manifest: Manifest`, `entropy: ProofChallenge` | `(proofInputs, proof)` |
-| `verify` | Verify a proof against its public inputs. | `proof: AnyProof`, `proofInputs: AnyProofInputs` | `bool` |
+| Interface | Description                                                           | Input                                                            | Output                 |
+| --------- | --------------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------- |
+| `new`     | Construct a `Prover` with a block store and the backend proof system. | `blockStore: BlockStore`, `backend: AnyBackend`, `nSamples: int` | `Prover`               |
+| `prove`   | Produce a succinct proof for the given slot and entropy.              | `slotIdx: int`, `manifest: Manifest`, `entropy: ProofChallenge`  | `(proofInputs, proof)` |
+| `verify`  | Verify a proof against its public inputs.                             | `proof: AnyProof`, `proofInputs: AnyProofInputs`                 | `bool`                 |
 
 ## 3. Functional Requirements
 
