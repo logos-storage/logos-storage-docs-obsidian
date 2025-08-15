@@ -1,6 +1,6 @@
-## 1.  Rationale
+## Rationale
 
-The Codex Manifest provides the description of the metadata uploaded to the Codex network. It is in many ways similar to the BitTorrent metainfo file (see [BEP3](http://bittorrent.org/beps/bep_0003.html) from [BitTorrent Enhancement Proposals (BEPs)](https://www.bittorrent.org/beps/bep_0000.html)) also known as `.torrent` files. While the BitTorrent metainfo files are generally distributed out-of-band, Codex Manifest receives its own [Content IDentifier (CID)](https://docs.ipfs.tech/concepts/content-addressing/#content-identifiers-cids) that is announced on the Codex DHT (see also [[Codex DHT - Component specification]]).
+The Codex Manifest provides the description of the metadata uploaded to the Codex network. It is in many ways similar to the BitTorrent metainfo file (see [BEP3](http://bittorrent.org/beps/bep_0003.html) from [BitTorrent Enhancement Proposals (BEPs)](https://www.bittorrent.org/beps/bep_0000.html)) also known as `.torrent` files. While the BitTorrent metainfo files are generally distributed out-of-band, Codex Manifest receives its own [[Content Identifier (CID)]] that is announced on the Codex DHT (see also [[Codex DHT - Component specification]]).
 
 The intended use of the Codex Manifest is indeed easier to grasp by comparing it to the BitTorrent metainfo file.
 
@@ -25,7 +25,7 @@ Because in Codex, Manifest CID is announced on the DHT, the nodes storing the co
 
 From this rationale we almost immediately see the most important use case for the Codex Manifest in general and the Codex Manifest CID in particular is the ability to uniquely identify the content and be able to retrieve that content from any single Codex client. This and other functional requirements will be the subject of the next section.
 
-## 2. Functional Requirements
+## Functional Requirements
 
 The Codex client should enable the user to achieve the following use cases.
 
@@ -38,21 +38,17 @@ The Codex client should enable the user to achieve the following use cases.
 - Given a Codex manifest CID, retrieve the corresponding Codex manifest from the local node if stored locally, otherwise, download it it from the network.
 - For each requirement listed above, a compliant Codex client must provide the corresponding API.
 
-TDB: here comes the list of APIs with examples.
-## 3. Non-functional Requirements
+We document the required API on the [api.codex.storage](https://api.codex.storage/#tag/Data) page.
+## Non-functional Requirements
 
 As we already saw in the previous section, using the Codex Manifest CID, the user should be able to use any compliant Codex client to download the content identified by Codex Manifest CID. In this section we focus on the non-functional requirements which guarantee interoperability between compliant Codex clients.
 
-#### multicodecs
-
-> This probably need to be extracted to a separate entry and just referred here.
-
-The code of a multicodec is a unsigned integer encoded as unsigned varint as defined by [multiformats/unsigned-varint](https://github.com/multiformats/unsigned-varint). It is then used as a prefix to identify the data that follows.
-For human readability, where appropriate and non-ambiguous, we can refer to various multicodecs by their symbolic names. For instance, a muliticodec code for a SHA-256 [multihash](https://github.com/multiformats/multihash) is `0x12` and its symbolic name is `sha2-256`. In this specification we often refer to various multicodecs through a tuple containing the descriptive name and the corresponding hex value, e.g.: `(sha2-256, 0x12)`. There is a canonical table of multicodecs at [table.csv](https://github.com/multiformats/multicodec/blob/master/table.csv). Codex specific multicodecs are currently defined in [nim-libp2p](https://github.com/vacp2p/nim-libp2p/blob/master/libp2p/multicodec.nim). 
+In the [[#Rationale]] we already introduced the concept of a [[Content Identifier (CID)]]. CIDs are central to the Codex protocol and they relay on [[Multiformats]], which in turn relay on the predefined set of [[Multicodec|multicodecs]] to uniquely identify described format. The code of a multicodec is a unsigned integer encoded as `unsigned varint` as defined by [multiformats/unsigned-varint](https://github.com/multiformats/unsigned-varint). It is then used as a prefix to identify the data that follows.
+For human readability, where appropriate and non-ambiguous, we can refer to various multicodecs by their symbolic names. For instance, a muliticodec code for a SHA-256 [multihash](https://github.com/multiformats/multihash) is `0x12` and its symbolic name is `sha2-256`. In this specification we often refer to various multicodecs through a tuple containing the descriptive name and the corresponding hex value, e.g.: `(sha2-256, 0x12)`. There is a canonical table of multicodecs at [table.csv](https://github.com/multiformats/multicodec/blob/master/table.csv). Codex specific multicodecs are currently defined in [nim-libp2p](https://github.com/vacp2p/nim-libp2p/blob/multihash-poseidon2/libp2p/multicodec.nim).
 
 ### Codex Manifest Attributes
 
-In this section we describe the Codex Manifest Attributes together using Nim as an example concrete realization.
+In this section we describe the Codex Manifest Attributes that each compliant client must observe to guarantee interoperability.
 #### treeCid
 
 The `treeCid` is the CID of the root of the [[Codex Tree]], which is a form of a Merkle Tree corresponding to the dataset described by the manifest. Its multicodec is `(codex-root, 0xCD03)`.
@@ -91,18 +87,18 @@ Codex Manifest CID uses `(codex-manifest, 0xCD01)` multicodec and `(sha2-256, 0x
 
 ### Codex Manifest Encoding
 
-Codex Manifest attributes are encoded using [Protocol Buffers](https://protobuf.dev/) with the following encoding:
+Codex Manifest attributes are encoded using [Protocol Buffers](https://protobuf.dev/) (`Proto3`) with the following encoding:
 
 ```protobuf
 Message Header {
   optional bytes treeCid = 1;        # cid (root) of the tree
   optional uint32 blockSize = 2;     # size of a single block
   optional uint64 datasetSize = 3;   # size of the dataset
-  optional MultiCodec codec = 4;    # Dataset codec
-  optional MultiCodec hcodec  = 5    # Multihash codec
-  optional CidVersion version = 6;  # Cid version
-  optional string filename = 8;    # original filename
-  optional string mimetype = 9;    # original mimetype
+  optional uint32 codec = 4;         # Dataset codec
+  optional uint32 hcodec  = 5        # Multihash codec
+  optional uint32 version = 6;       # Cid version
+  optional string filename = 8;      # original filename
+  optional string mimetype = 9;      # original mimetype
 }
 
 Message CodexManifest {
@@ -112,19 +108,19 @@ Message CodexManifest {
 
 We see that in the header, there is a gap now - we miss field index `7` in the definition above. This is because in the current implementation, at index `7` we have `optional ErasureInfo erasure = 7; # erasure coding info`, which is not used in the "altruistic" mode.
 
-Moreover, the current implementation still distinguishes between *required* and *optional* fields, which indicates the implementation is currently using `Proto2` version of the Protocol Buffers. In `Proto3` version (current version, default since 2016), all fields are optional by default and the `required` keyword is no longer available. If a field is not set, it gets the *default value* for its type (e.g., `0` for numbers, `""` for strings, `false` for booleans).
+The current implementation is using `Proto3` version of the Protocol Buffers. Important to emphasize here is the use of the `optional` keyword for each single field. The reason for that is the so-called _Explicit Presence_. In `Proto3`, if a *singular* field is **not** marked as *optional*, the decoding side cannot check if the field was explicitly set to a default value or it was missing. If the field is marked `optional` you *should* be able to check if it was explicitly set - how you do that varies by language and even by protobuf implementation within the language. For more information about this topic, please refer to [Recommend proto3 issue](https://github.com/libp2p/specs/issues/465) and [Application note: Field presence](https://github.com/protocolbuffers/protobuf/blob/main/docs/field_presence.md).
 
-With this two new insights, we could simplify the Protocol Buffers message for the new altruistic mode simply be:
+With this insights, we could simplify the Protocol Buffers message for the new altruistic mode to simply be:
 
 ```protobuf
 Message CodexManifest {
-  bytes treeCid = 1;        # cid (root) of the tree
-  uint32 blockSize = 2;     # size of a single block
-  uint64 datasetSize = 3;   # size of the dataset
-  MultiCodec codec = 4;     # Dataset codec
-  MultiCodec hcodec = 5     # Multihash codec
-  CidVersion version = 6;   # Cid version
-  string filename = 7;      # original filename
-  string mimetype = 8;      # original mimetype
+  optional bytes treeCid = 1;        # cid (root) of the tree
+  optional uint32 blockSize = 2;     # size of a single block
+  optional uint64 datasetSize = 3;   # size of the dataset
+  optional uint32 codec = 4;         # Dataset codec
+  optional uint32 hcodec  = 5        # Multihash codec
+  optional uint32 version = 6;       # Cid version
+  optional string filename = 7;      # original filename
+  optional string mimetype = 8;      # original mimetype
 }
 ```
