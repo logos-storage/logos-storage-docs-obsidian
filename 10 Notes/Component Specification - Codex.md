@@ -42,6 +42,8 @@ List of features or behaviors the component must provide.
 - The component provides logging information.
 - The component returns error objects in case of errors.
 - The component returns nullable or optional values where appropriate.
+- The component provides other components with their required configuration information.
+- The component ensures configuration information is safely persisted.
 ### Network
 - The component enables the user to view the current network status information as provided by the p2p module and discovery module.
 - The component enables the user to query the discovery module for connection information.
@@ -73,31 +75,45 @@ Description of algorithms, workflows, or state machines.
 Include diagrams if needed.
 
 ### Data
-#### Reading data
+#### Block retrieval
 - Given a CID
 1. Engage local data storage module to check for block presence
-1. If present, use local data storage module to read the data
+1. If present, use local data storage module to read and yield the block
 1. Otherwise, use block exchange to retrieve the block from the network
-1. When completed, read the data
-1. Otherwise, fail with retrieval exception
+1. When completed, use the local data storage module to store the block
+1. Yield the block
 
+#### Reading data block
+- Given a data block CID
+- Given successful block retrieval
+1. Read and yield the block data
+
+#### Reading a manifest
+- Given a manifest CID
+- Given successful block retrieval
+1. Read and deserialize the manifest
+1. Yield the manifest object
+
+#### Reading dataset
+- Given a manifest CID
+- Given the manifest was read successfully
+1. Iterate the data block information from the manifest
+1. Read each data block and yield its data
+
+#### Writing dataset
+- Given a raw dataset in the form of a stream
+1. Read data from the stream until a block-sized amount is read or until the stream ends, whichever comes first.
+1. If the read data is less than a block-sized amount, pad the remaining space with NULL-bytes.
+1. Engage the local data storage module to store the data as a block. It will yield a CID.
+1. Append the CID to a temporary array.
+1. Repeat the previous steps until the stream ends.
+1. Engage the manifest module to create a manifest object from the array of CIDs.
+1. Serialize the manifest object.
+1. Engage the local data storage module to store the serialized manifest data. It will yield a CID.
+1. Yield the manifest CID.
 
 *** EACH FLOW ***
 <!-- 
-### Data
-> - Whenever data retrieval is started, the local data storage module will be queried first. If it is unable to provide the requested data, the block exchange module may be activated in order to retrieve the data from other Codex nodes in the network.
-> - When data is retrieved from the block exchange module, it is automatically stored in the local data storage module.
-> - When data is stored in the local data storage module, the discovery module is automatically activated to announce the new data to the network so that other Codex nodes can discover it.
-
-| Interface | Description | Input | Output |
-|-----------|-------------|-------|--------|
-| `iterateManifests` | Activates store module to iterate all manifests stored locally. | - | Manifests are yielded by callback. |
-| `retrieve` | Activates local data storage module or block exchange module to retrieve a single block or entire dataset, depending on whether the data is stored locally, and whether the CID represents a manifest. | CID | Data is yielded as a Stream object. |
-| `store` | Receives raw data stream and converts it into blocks. Creates basic manifest for the new blocks. Activates local data storage to store the new dataset. | Stream object from which to read the data, filename and type information. | CID |
-| `fetchManifest` | Activates local data storage or block exchange to retrieve a manifest. | CID | Manifest object. |
-| `delete` | Activates local data storage to delete a single block or entire dataset, depending on whether the CID represents a manifest. | CID | - |
-| `fetchDatasetAsyncTask` | Activates local data storage and block exchange to retrieve a dataset. This operation is performed as a background task. | Manifest object. | - |
-
 ### Marketplace
 | Interface | Description | Input | Output |
 |-----------|-------------|-------|--------|
