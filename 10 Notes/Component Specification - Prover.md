@@ -3,9 +3,7 @@
 ## 1. Purpose and Scope
 
 ### Purpose/Motivation
-In decentralized storage networks, such as Codex one of the main challenges is ensuring durability and availability of the data stored by storage providers (SP). To achieve durability, random sampling (along with erasure coding) is used to provide probabilistic guarantees while touching only a tiny fraction of the stored data per challenge. 
-
-The primary purpose of the proving module is to provide a succinct, publicly verifiable way to check that an SP still holds the data it committed to. It samples cells from the stored slot, and turns those samples and Merkle paths into a small Groth16 proof that ties back to the published dataset root (commitment). The marketplace contract verifies this proof on-chain and uses the result to manage incentives e.g. payments and slashing. 
+In decentralized storage networks, such as Codex one of the main challenges is ensuring durability and availability of the data stored by storage providers (SP). To achieve durability, random sampling (along with erasure coding) is used to provide probabilistic guarantees while touching only a tiny fraction of the stored data per challenge.  The purpose of the proving module is to provide a succinct, publicly verifiable way to check that an SP still holds the data it committed to. It samples cells from the stored slot, and turns those samples and Merkle paths into a small Groth16 proof that ties back to the published dataset root (commitment). The marketplace contract verifies this proof on-chain and uses the result to manage incentives e.g. payments and slashing. 
 
 ### Scope
 The scope of this specification document is limited to the proving module which consists of the following functionalities:
@@ -15,25 +13,25 @@ The scope of this specification document is limited to the proving module which 
 - Generates zero-knowledge proofs for randomly selected cells in the stored slots.
 - Submits proofs to verifier in the network (the on-chain marketplace smart contract).
 
-The Proving module relies on `blockStore` for storage and `SlotsBuilder` to build initial commitments to the stored data. Additionally, this document doesn't specify the incentives involved (collateral and slashing), which is handled by the marketplace logic.
+The Proving module relies on `blockStore` for storage and `SlotsBuilder` to build initial commitments to the stored data. Additionally, The incentives involved (collateral and slashing) are handled by the marketplace logic.
 
 ### Terminology
 
-| Term | Description |
-|------|-------------|
-| **Storage Client (SC)** | A node that participates in Codex to buy storage. |
-| **Storage Provider (SP)** | A node that participates in Codex by selling disk space to other nodes. |
-| **Dataset** | A set of fixed-size slots provided by (possibly different) SCs. |
-| **Cell** | Smallest circuit sampling unit (e.g., 2 KiB), its bytes are packed into field elements and hashed. |
-| **Block** | Network transfer unit (e.g., 64 KiB) consists of multiple cells, used for transport. |
-| **Slot** | The erasure-coded fragment of a dataset stored by a single SP. proof requests are related to slots. |
-| **Commitment** | Cryptographic binding (and hiding if needed) to specific data. In Codex this is a Poseidon2 Merkle root (e.g., Dataset Root or Slot Root). It allows anyone to verify proofs against the committed content. |
-| **Dataset Root / Slot Root** | Poseidon2 Merkle roots used as public commitments in the circuit. Not the SHA-256 content tree used for CIDs. |
-| **Entropy** | Public randomness (e.g., blockhash) used to derive random sample indices. |
-| **Witness** | Private zk circuit inputs.|
-| **Public Inputs** | Values known to (or shared with) the verifier. |
-| **Groth16** | Succinct zk-SNARK proof system used by Codex. |
-| **Proof Window** | The time/deadline within which the SP must submit a valid proof. |
+| Term                         | Description                                                                                                                                                                                                 |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Storage Client (SC)**      | A node that participates in Codex to buy storage.                                                                                                                                                           |
+| **Storage Provider (SP)**    | A node that participates in Codex by selling disk space to other nodes.                                                                                                                                     |
+| **Dataset**                  | A set of fixed-size slots provided by (possibly different) SCs.                                                                                                                                             |
+| **Cell**                     | Smallest circuit sampling unit (e.g., 2 KiB), its bytes are packed into field elements and hashed.                                                                                                          |
+| **Block**                    | Network transfer unit (e.g., 64 KiB) consists of multiple cells, used for transport.                                                                                                                        |
+| **Slot**                     | The erasure-coded fragment of a dataset stored by a single SP. proof requests are related to slots.                                                                                                         |
+| **Commitment**               | Cryptographic binding (and hiding if needed) to specific data. In Codex this is a Poseidon2 Merkle root (e.g., Dataset Root or Slot Root). It allows anyone to verify proofs against the committed content. |
+| **Dataset Root / Slot Root** | Poseidon2 Merkle roots used as public commitments in the circuit. Not the SHA-256 content tree used for CIDs.                                                                                               |
+| **Entropy**                  | Public randomness (e.g., blockhash) used to derive random sample indices.                                                                                                                                   |
+| **Witness**                  | Private zk circuit inputs.                                                                                                                                                                                  |
+| **Public Inputs**            | Values known to (or shared with) the verifier.                                                                                                                                                              |
+| **Groth16**                  | Succinct zk-SNARK proof system used by Codex.                                                                                                                                                               |
+| **Proof Window**             | The time/deadline within which the SP must submit a valid proof.                                                                                                                                            |
 
 ## 2. Interfaces
 
@@ -70,7 +68,7 @@ Below are the main interfaces for each sub-component. The interfaces below omit 
 | Template                 | Description                                                                                                                                                                  | Parameters                                                              | **Inputs (signals)**                                                                                                                                                                            | **Outputs (signals)** |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
 | `SampleAndProve`         | Main component in the circuit. Verifies `nSamples` cells (`cell->block->slot`) and the `slot->dataset` path, binding the proof to `dataSetRoot`, `slotIndex`, and `entropy`. | `maxDepth, maxLog2NSlots, blockTreeDepth, nFieldElemsPerCell, nSamples` | `entropy`, `dataSetRoot`, `slotIndex`, `slotRoot`, `nCellsPerSlot`, `nSlotsPerDataSet`, `slotProof[maxLog2NSlots]`, `cellData[nSamples][nFieldElemsPerCell]`, `merklePaths[nSamples][maxDepth]` | -                     |
-| `ProveSingleCell`        | Verifies one sampled cell: hashes `cellData` with Poseidon2 (rate=2) and checks the concatenated Merkle path up to `slotRoot`.                                               | `nFieldElemsPerCell, botDepth, maxDepth`                                | `slotRoot`, `data[nFieldElemsPerCell]`, `lastBits[maxDepth]`, `indexBits[maxDepth]`, `maskBits[maxDepth+1]`, `merklePath[maxDepth]`                                                             | -                     |
+| `ProveSingleCell`        | Verifies one sampled cell: hashes `cellData` with Poseidon2 and checks the concatenated Merkle path up to `slotRoot`.                                                        | `nFieldElemsPerCell, botDepth, maxDepth`                                | `slotRoot`, `data[nFieldElemsPerCell]`, `lastBits[maxDepth]`, `indexBits[maxDepth]`, `maskBits[maxDepth+1]`, `merklePath[maxDepth]`                                                             | -                     |
 | `RootFromMerklePath`     | Reconstructs a Merkle root from a leaf and path using `KeyedCompression`.                                                                                                    | `maxDepth`                                                              | `leaf`, `pathBits[maxDepth]`, `lastBits[maxDepth]`, `maskBits[maxDepth+1]`, `merklePath[maxDepth]`                                                                                              | `recRoot`             |
 | `CalculateCellIndexBits` | Derives the index bits for a sampled cell from `(entropy, slotRoot, counter)`, masked by `cellIndexBitMask`.                                                                 | `maxLog2N`                                                              | `entropy`, `slotRoot`, `counter`, `cellIndexBitMask[maxLog2N]`                                                                                                                                  | `indexBits[maxLog2N]` |
 
@@ -124,7 +122,7 @@ At a high level, the proving module contains three components: Sampler, Prover, 
 
 - **1. Data Commitment**: The proving module requires an initial commitment to the stored data in order to allow the verifier to verify the proofs against it.  This initial commitment is constructed using the `SlotsBuilder`. The commitment used in Codex is the Merkle root of the dataset tree and slot tree.
 - **2. Sample:** take a challenge `(slotIndex, entropy, nSamples)` and map it to cell indices within that slot. For every sampled cell, fetch the `cellData` and concatenates the necessary Merkle paths: `cell -> block`, `block -> slot`, and `slot -> dataset` (from the `BlockStore` and `SlotsBuilder`).
-- **3. Prove:** take `ProofInputs` and asks the proving system backend (Groth16) to produce a succinct proof. The backend proving system using the ZK circuit logic to create the proof. Verification can be done on-chain or off-chain against the same inputs.
+- **3. Prove:** take `ProofInputs` and asks the proving system backend (Groth16) to produce a succinct proof. The backend proving system uses the ZK circuit logic to create the proof. Verification can be done on-chain or off-chain against the same inputs.
 
 ### Flow
 
