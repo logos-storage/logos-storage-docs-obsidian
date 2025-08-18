@@ -200,6 +200,25 @@ All states move to `SaleErrored` if an error is raised.
 - Move to `SaleFailed` on `RequestFailed` event from the `marketplace`
 - Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
 
+```mermaid
+---
+config:
+  layout: elk
+---
+flowchart LR
+  GetRequestEnd["Get request end"] -->
+  GetSlotState["Fetch slot state"] -- Free, Repair -->
+  FindAvailability["Find availability"] -- Found -->
+  SlotReserving
+  GetSlotState -- Other state --> SaleIgnored
+  FindAvailability -- Not found --> SaleIgnored
+  GetRequestEnd -- Exception --> SaleErrored
+  GetSlotState -- Exception --> SaleErrored
+  FindAvailability -- Exception --> SaleErrored
+  OnCancelled["Cancelled timer elapsed"] --> SaleCancelled
+  OnFailed["RequestFailed contract event"] --> SaleFailed
+```
+
 ### 5.5.2 `SaleSlotReserving`
 
 - Check if the slot can be reserved
@@ -207,6 +226,27 @@ All states move to `SaleErrored` if an error is raised.
 - Move to `SaleIgnored` if `SlotReservationNotAllowedError` is raised or the slot cannot be reserved. The collateral is returned.
 - Move to `SaleFailed` on `RequestFailed` event from the `marketplace`
 - Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
+
+```mermaid
+---
+config:
+  layout: elk
+---
+flowchart LR
+  FetchCanReserve["Fetch canReserveSlot"] -- true -->
+  ReserveSlot["Reserve slot"] -->
+  SaleDownloading
+  ReserveSlot -- Cannot reserve exception -->
+  SaleIgnored
+  ReserveSlot -- Other exception --> SaleErrored
+
+  FetchCanReserve -- false --> SaleIgnored
+
+  FetchCanReserve -- Exception --> SaleErrored
+
+  OnCancelled["Cancelled timer elapsed"] --> SaleCancelled
+  OnFailed["RequestFailed contract event"] --> SaleFailed
+```
 
 ### 5.5.3 `SaleDownloading`
 
@@ -220,6 +260,24 @@ All states move to `SaleErrored` if an error is raised.
 - Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
 - Move to `SaleFilled` on `SlotFilled` event from the `marketplace`
 
+```mermaid
+---
+config:
+  layout: elk
+---
+flowchart LR
+  FetchSlotState["Fetch slot state"] -- isRepairing -->
+  OnStore["onStore(isRepairing)"] -->
+  SaleInitialProving
+
+  OnStore -- Exception --> SaleErrored
+  FetchSlotState -- Exception --> SaleErrored
+
+  OnCancelled["Cancelled timer elapsed"] --> SaleCancelled
+  OnFailed["RequestFailed contract event"] --> SaleFailed
+
+```
+
 ### 5.5.4 `SaleInitialProving`
 
 - Wait for a stable initial challenge
@@ -227,6 +285,26 @@ All states move to `SaleErrored` if an error is raised.
 - Move to `SaleFilling` if successful
 - Move to `SaleFailed` on `RequestFailed` event from the `marketplace`
 - Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
+
+```mermaid
+---
+config:
+  layout: elk
+---
+flowchart LR
+  WaitForStableChallenge["Wait for stable challenge"] -->
+  GetChallenge["Get challenge"] -- challenge -->
+  onProve["onProve(slot, challege)"] -->
+  SaleFilling
+
+  WaitForStableChallenge -- Exception --> SaleErrored
+  GetChallenge -- Exception --> SaleErrored
+  onProve -- Exception --> SaleErrored
+
+  OnCancelled["Cancelled timer elapsed"] --> SaleCancelled
+  OnFailed["RequestFailed contract event"] --> SaleFailed
+```
+
 
 ### 5.5.5 `SaleFilling`
 
@@ -237,6 +315,24 @@ All states move to `SaleErrored` if an error is raised.
 - Move to `SaleFailed` on `RequestFailed` event from the `marketplace`
 - Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
 
+```mermaid
+---
+config:
+  layout: elk
+---
+flowchart LR
+  GetCollateral["Get collateral to fill slot"] -- collateral -->
+  FillSlot["fillSlot(collateral)"] -->
+  SaleFilled
+
+  GetCollateral -- Exception --> SaleErrored
+  FillSlot -- Exception --> SaleErrored
+  FillSlot -- Slot is not free (filled by other host) --> SaleIgnored
+
+  OnCancelled["Cancelled timer elapsed"] --> SaleCancelled
+  OnFailed["RequestFailed contract event"] --> SaleFailed
+```
+
 ### 5.5.6 `SaleFilled`
 
 - Ensure that the current host has filled the slot by checking the signer address
@@ -246,6 +342,27 @@ All states move to `SaleErrored` if an error is raised.
 - Move to `SaleFailed` on `RequestFailed` event from the `marketplace`
 - Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
 
+```mermaid
+---
+config:
+  layout: elk
+---
+flowchart LR
+  GetSlotHost["Get slot host"] -- Slot filled by me -->
+  GetRequestEnd["Get request end"] -- requestEnd -->
+  UpdateExpiry["Update dataset expiry:<br>onExpiryUpdate(requestEnd)"] -->
+  SaleProving
+
+  GetSlotHost -- Exception --> SaleErrored
+  GetRequestEnd -- Exception --> SaleErrored
+  UpdateExpiry -- Exception --> SaleErrored
+  GetSlotHost -- Slot filled by other host --> SaleErrored
+
+  OnCancelled["Cancelled timer elapsed"] --> SaleCancelled
+  OnFailed["RequestFailed contract event"] --> SaleFailed
+
+```
+
 ### 5.5.7 `SaleProving`
 
 - For each period: fetch challenge, call `onProve`, and submit proof
@@ -254,6 +371,37 @@ All states move to `SaleErrored` if an error is raised.
 - Raise `SlotNotFilledError` when the slot is not filled
 - Move to `SaleFailed` on `RequestFailed` event from the `marketplace`
 - Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
+
+```mermaid
+---
+config:
+  layout: elk
+---
+flowchart TB
+  GetCurrentPeriod["Get current period"] -->
+  GetSlotState["Get slot state"] -- Filled, proof required -->
+  GenProof["Generate proof: onProve"] -- proof -->
+  SubmitProof["submitProof(proof)"] -->
+  WaitUntilNextPeriod["Wait until start of next period"] -->
+  GetCurrentPeriod
+
+  GetSlotState -- Filled, proof not required --> WaitUntilNextPeriod
+  GetSlotState -- Cancelled --> WaitForCancelled["Do nothing, wait for elapsed cancelled timer"] --> WaitUntilNextPeriod
+  GetSlotState -- Repair --> SaleErrored
+  GetSlotState -- Failed --> WaitForFailed["Do nothing, wait for RequestFailed contract event"] --> WaitUntilNextPeriod
+  GetSlotState -- Finished --> SalePayout
+  GetSlotState -- Free, Paid --> SaleErrored
+
+  OnCancelled["Cancelled timer elapsed"] --> SaleCancelled
+  OnFailed["RequestFailed contract event"] --> SaleFailed
+
+  GenProof -- Exception --> WaitUntilNextPeriod
+  SubmitProof -- Exception --> WaitUntilNextPeriod
+  GetCurrentPeriod -- Exception --> SaleErrored
+  GetSlotState -- Exception --> SaleErrored
+  WaitUntilNextPeriod -- Exception --> SaleErrored
+
+```
 
 ### 5.5.8 `SaleProvingSimulated`
 
@@ -267,10 +415,43 @@ All states move to `SaleErrored` if an error is raised.
 - Move to `SaleFailed` on `RequestFailed` event from the `marketplace`
 - Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
 
+```mermaid
+---
+config:
+  layout: elk
+---
+flowchart LR
+  freeSlot -->
+  SaleFinished
+
+  freeSlot -- Exception --> SaleErrored
+
+  OnCancelled["Cancelled timer elapsed"] --> SaleCancelled
+  OnFailed["RequestFailed contract event"] --> SaleFailed
+
+```
+
 ### 5.5.10 `SaleFinished`
 
 - Call `onClear` hook
 - Call `onCleanUp` hook
+
+```mermaid
+---
+config:
+  layout: elk
+---
+flowchart LR
+  onClear -->
+  onCleanUp
+
+  onClear -- Exception --> SaleErrored
+  onCleanUp -- Exception --> SaleErrored
+
+  OnCancelled["Cancelled timer elapsed"] --> SaleCancelled
+  OnFailed["RequestFailed contract event"] --> SaleFailed
+
+```
 
 ### 5.5.11 `SaleFailed`
 
