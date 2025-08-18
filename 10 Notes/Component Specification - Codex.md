@@ -74,7 +74,7 @@ Performance, security, scalability, reliability, etc.
 Description of algorithms, workflows, or state machines.
 Include diagrams if needed.
 
-### Data
+### Data workflows
 #### Block retrieval
 - Given a CID
 1. Engage local data storage module to check for block presence
@@ -112,18 +112,57 @@ Include diagrams if needed.
 1. Engage the local data storage module to store the serialized manifest data. It will yield a CID.
 1. Yield the manifest CID.
 
-*** EACH FLOW ***
-<!-- 
-### Marketplace
-| Interface | Description | Input | Output |
-|-----------|-------------|-------|--------|
-| `requestStorage` | Activates and applies erasure-coding to the dataset. Activates the slot builder module to construct slots and produce a verifiable manifest. Then activates the purchasing module to create a new on-chain storage-request object. | CID, storage contract duration and expiry times, storage contract durability parameters. | Purchase ID |
-| `onStore` | Activated as callback from Sales module when a new storage-request slot is to be stored by the node. Activates local data storage, block exchange, and slot builder modules in order to retrieve or repair a single slot that is part of a verifiable manifest. Data expiration values are adjusted to match the storage-request duration. | Storage-request object, expiry duration, slot index. | - | -->
+### Marketplace workflows
+#### Storage request creation
+- Given a dataset CID
+- Given the manifest was read successfully
+- Given duration and durability information
+1. Apply erasure-coding to the manifest in accordance with the provided durability information. This yields a new manifest object that includes erasure-coding information.
+1. Engage slot-builder module to perform slot building in accordance with the provided durability information. This yields a new manifest object that includes verification information.
+1. Using the manifest provided by the slot builder, engage the purchasing module to create an on-chain storage-request object in accordance with the provided duration information. This yields a purchase ID.
+1. Yield the purchase ID.
 
+#### Slot hosting
+- Given the sales module has activated this workflow using a correct dataset CID and slot index.
+- Given the manifest was read successfully
+- Given the manifest contains verification information
+1. Engage the block exchange module in order to fetch the blocks of the slot as indicated by the slot index and manifest information.
+1. Engage the slot-builder module to build a slot in accordance with the provided slot index. This will ensure the slot data is contained in the local data storage module.
 
 ## 6. Dependencies
-| Dependency | Implementation |
-|------------|----------------|
+This component depends on every other component. It contributes no additional dependencies unique to itself.
 
 ## 7. Data Models
 Data structures, schemas, or classes used or produced.
+
+### Node
+Central orchestrator component of the Codex node application.
+```
+Contracts* =
+    tuple[
+      client: ?ClientInteractions,
+      host: ?HostInteractions,
+      validator: ?ValidatorInteractions,
+    ]
+
+  CodexNode* = object
+    switch: Switch
+    networkId: PeerId
+    networkStore: NetworkStore
+    engine: BlockExcEngine
+    prover: ?Prover
+    discovery: Discovery
+    contracts*: Contracts
+    clock*: Clock
+    storage*: Contracts
+    taskpool: Taskpool
+    trackedFutures: TrackedFutures
+```
+
+### API
+Module responsible for exposing Codex node functionality via HTTP requests. Contains categories:
+- Data API
+- Sales API
+- Purchasing API
+- Node API
+- Debug API
