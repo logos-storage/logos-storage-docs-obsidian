@@ -75,6 +75,7 @@ The module operates both for new requests and for ongoing ones, such as when a s
 - Reserve slots through the `marketplace`
 - Fill reserved slots when data is stored and proven
 - Submit proofs periodically
+- React to events from the `marketplace`
 
 ### 3.3 Data Handling
 
@@ -105,6 +106,8 @@ The module operates both for new requests and for ongoing ones, such as when a s
   * Implement a window mechanism to ensure slots from the same dataset are geographically distributed across nodes, preventing centralisation of stored data.
 - **Observability**
   * Log all state transitions with `requestId`, `slotIndex`, and relevant identifiers (`slotId`, `reservationId`, `availabilityId`).
+- **Scalability**
+	* Dispatch a worker from the pool to handle concurrent sales state machine flows. Worker must be returned to pool after deterministic state machine result.
 
 ## 5. Internal Behaviour
 
@@ -143,7 +146,7 @@ Within a single request, per-slot items are shuffled before enqueuing so the def
 
 ### 5.2.2 Pause / Resume
 
-When the Slot queue processes an item with `seen = true`, it means that the item was already evaluated against the current availabilities and did not match. To avoid busy-looping over the same items, the queue pauses itself.
+When the Slot queue processes an item with `seen = true`, it means that the item was already evaluated against the current availabilities and did not match. To avoid draining the queue with untenable requests (due to insufficient availability), the queue pauses itself.
 
 The queue resumes when:
 
@@ -157,7 +160,7 @@ Availability matching occurs in `SalePreparing`. If no availability fits at that
 
 ### 5.2.4 Startup
 
-On `SlotQueue.start()`, the sales module reconciles persisted reservations and deletes inactive ones to prevent capacity leaks:
+On `SlotQueue.start()`, the sales module first deletes reservations associated with inactive storage requests, then starts a new `SalesAgent` for each active storage request:
 
 - Fetch the active `on-chain` active slots.
 - Delete the local reservations for slots that are not in the active list.
@@ -194,12 +197,16 @@ All states move to `SaleErrored` if an error is raised.
 - Create a reservation
 - Move to `SaleSlotReserving` if successful
 - Move to `SaleIgnored` if no availability is found or if `BytesOutOfBoundsError` is raised because of no space available.
+- Move to `SaleFailed` on `RequestFailed` event from the `marketplace`
+- Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
 
 ### 5.5.2 `SaleSlotReserving`
 
 - Check if the slot can be reserved
 - Move to `SaleDownloading` if successful
 - Move to `SaleIgnored` if `SlotReservationNotAllowedError` is raised or the slot cannot be reserved. The collateral is returned.
+- Move to `SaleFailed` on `RequestFailed` event from the `marketplace`
+- Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
 
 ### 5.5.3 `SaleDownloading`
 
@@ -209,14 +216,17 @@ All states move to `SaleErrored` if an error is raised.
 - Stream and persist data via `onStore`
 - For each written batch, release bytes from the reservation
 - Move to `SaleInitialProving` if successful
-- Move to `SaleCancelled / SaleFailed` / `SaleFilled` on events
+- Move to `SaleFailed` on `RequestFailed` event from the `marketplace`
+- Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
+- Move to `SaleFilled` on `SlotFilled` event from the `marketplace`
 
 ### 5.5.4 `SaleInitialProving`
 
 - Wait for a stable initial challenge
 - Produce the initial proof via `onProve`
 - Move to `SaleFilling` if successful
-- Move to `SaleCancelled` / `SaleFailed` on events
+- Move to `SaleFailed` on `RequestFailed` event from the `marketplace`
+- Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
 
 ### 5.5.5 `SaleFilling`
 
@@ -224,7 +234,8 @@ All states move to `SaleErrored` if an error is raised.
 - Fill the slot
 - Move to `SaleFilled` if successful
 - Move to `SaleIgnored` on `SlotStateMismatchError`. The collateral is returned.
-- Move to `SaleCancelled` / `SaleFailed` on events
+- Move to `SaleFailed` on `RequestFailed` event from the `marketplace`
+- Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
 
 ### 5.5.6 `SaleFilled`
 
@@ -232,6 +243,8 @@ All states move to `SaleErrored` if an error is raised.
 - Notify by calling `onFilled` hook
 - Call `onExpiryUpdate` to change the data expiry from expiry date to request end date
 - Move to `SaleProving` (or `SaleProvingSimulated` for simulated mode)
+- Move to `SaleFailed` on `RequestFailed` event from the `marketplace`
+- Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
 
 ### 5.5.7 `SaleProving`
 
@@ -239,7 +252,8 @@ All states move to `SaleErrored` if an error is raised.
 - Move to `SalePayout` when the slot request ends
 - Re-raise `SlotFreedError` when the slot is freed
 - Raise `SlotNotFilledError` when the slot is not filled
-- Move to `SaleCancelled` / `SaleFailed` on events
+- Move to `SaleFailed` on `RequestFailed` event from the `marketplace`
+- Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
 
 ### 5.5.8 `SaleProvingSimulated`
 
@@ -250,6 +264,8 @@ All states move to `SaleErrored` if an error is raised.
 - Get the current collateral and try to free the slot to ensure that the slot is freed after payout.
 - Forward the returned collateral to cleanup
 - Move to `SaleFinished` if successful
+- Move to `SaleFailed` on `RequestFailed` event from the `marketplace`
+- Move to `SaleCancelled` on cancelled timer elapsed, set to storage contract expiry
 
 ### 5.5.10 `SaleFinished`
 
@@ -324,12 +340,29 @@ When the marketplace signals that reservations are full, the sales module remove
 
 ## 5.7 Reservations
 
-Reservations match slot requests to available capacity and keep accounting consistent without leaving allocations locked.
+The Reservations module manages both Availabilities and Reservations. When an Availability is created, it reserves bytes in the storage module so no other modules can use those bytes. Before a dataset for a slot is downloaded, a Reservation is created, and the freeSize of the Availability is reduced. When bytes are downloaded, the reservation of those bytes in the storage module is released. Accounting of both reserved bytes in the storage module and freeSize in the Availability are cleaned up upon completion of the state machine.
 
-- Lock bytes when creating a new reservation
-- Release committed bytes progressively during downloading
-- Free all remaining capacity and collateral when the sale ends
-- Create, update, and delete an availability to host slots
+```
+                                                                   +--------------------------------------+
+                                                                   |            RESERVATION               |
++---------------------------------------------------+              |--------------------------------------|
+|            AVAILABILITY                           |              | ReservationId  | id             | PK |
+|---------------------------------------------------|              |--------------------------------------|
+| AvailabilityId   | id                       | PK  |<-||-------o<-| AvailabilityId | availabilityId | FK |
+|---------------------------------------------------|              |--------------------------------------|
+| UInt256          | totalSize                |     |              | UInt256        | size           |    |
+|---------------------------------------------------|              |--------------------------------------|
+| UInt256          | freeSize                 |     |              | UInt256        | slotIndex      |    |
+|---------------------------------------------------|              +--------------------------------------+
+| UInt256          | duration                 |     |
+|---------------------------------------------------|
+| UInt256          | minPricePerBytePerSecond |     |
+|---------------------------------------------------|
+| UInt256          | totalCollateral          |     |
+|---------------------------------------------------|
+| UInt256          | totalRemainingCollateral |     |
++---------------------------------------------------+
+```
 
 ## 5.8 Hooks
 
@@ -337,7 +370,7 @@ Reservations match slot requests to available capacity and keep accounting consi
 - **onProve**: produces proofs for initial and periodic proving
 - **onExpiryUpdate**: notifies the client node of a change in the expiry data
 - **onSale**: notifies that the host is now responsible for the slot
-- **onClear**: notifies the client node to delete the data
+- **onClear**: notification emitted once the state machine has concluded; used to reconcile Availability bytes and reserved bytes in the storage module.
 
 ## 5.9 Error handling
 
