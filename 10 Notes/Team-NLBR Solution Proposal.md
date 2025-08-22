@@ -129,7 +129,7 @@ And then in the following diagram we show how the `index` and `data` files are p
 
 ## Archive Distribution and Download
 
-All the nodes that want to restore the message history, first need to retrieve the `index` file. Here, the selective download of the selected files from the torrent is used. After having the index files, the nodes can find out which periods they need to retrieve. Using the `offset`, `size`, and `padding`, they use BitTorrent library, to selectively fetch only the torrent pieces that they need. In our Codex integration proposal, we suggest taking advantage of Codex CIDs to formally decouple archive index from archive data. 
+All the nodes that want to restore the message history, first need to retrieve the `index` file. Here, the selective download of the selected files from the torrent is used. After having the index files, the nodes can find out which periods they need to retrieve. Using the `offset`, `size`, and `padding`, they use BitTorrent library to selectively fetch only the torrent pieces that they need. In our Codex integration proposal, we suggest taking advantage of Codex CIDs to formally decouple archive index from archive data. 
 
 ## Proposed Integration with Codex
 
@@ -172,9 +172,17 @@ The diagram below shows the relationship between the new `index` identified by a
 
 - Because each archive receives its own CID which will to be announced on DHT. If this is considered problem, we may apply bundling, or using block ranges and publish the whole `data` under its own CID. Although less elegant, it still nicely decouples `index` from the `data`, but in this case we may need to expose an API to retrieve specific block index under given `treeCid`.
 
-## Deployment
+## Deployment and Codex Library
 
 In the first prototype, we suggest to use Codex API in order to validate the idea and discover potential design flows early. After successful PoC, or already in parallel, we suggest building a Codex protocol library (stripped down from EC and marketplace), which will then be used to create GO bindings for the status-go integration. The same library should than also be used in the new Codex client.
+
+Creating the Codex library was not only long requested by IFT, but it also bring opportunity to rethink the system interfaces and work towards more modular, "plugable" design. In its first instance Codex library could be made of just the block-exchange protocol, discovery module (DHT), and *RepoStore* (block storage) - each of those could potentially be also separated into separate sub-libraries. By providing bindings for various programming languages, we can better stimulate community clients, our original Codex client being one of them. The illustration below shows a high-level overview of the composition and use of the Codex library.
+
+![[team-nl-br-design-4.svg]]
+
+## Changes required in the status-go client
+
+From the numerous code fragments presented above, we can already imagine the works that have to be done in status-go code base. As discussed above the general entry is the [InitHistoryArchiveTasks](https://github.com/status-im/status-go/blob/6322f22783585474803cfc8a6f0a914757d763b5/protocol/messenger_communities.go#L3783), which will bring us to most of the other relevant changes, most importantly [CreateAndSeedHistoryArchive](https://github.com/status-im/status-go/blob/6322f22783585474803cfc8a6f0a914757d763b5/protocol/communities/manager_archive.go#L314) and [createHistoryArchiveTorrent](https://github.com/status-im/status-go/blob/6322f22783585474803cfc8a6f0a914757d763b5/protocol/communities/manager_archive_file.go#L55). We expect most of the changes to be performed around [protocol/communities/manager_archive.go](https://github.com/status-im/status-go/blob/develop/protocol/communities/manager_archive.go) and [protocol/communities/manager_archive_file.go](https://github.com/status-im/status-go/blob/develop/protocol/communities/manager_archive_file.go).
 
 ## Long Term Durability Support
 
