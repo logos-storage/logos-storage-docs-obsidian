@@ -71,19 +71,19 @@ Below are the main interfaces for each sub-component. The interfaces below omit 
 | `ProveSingleCell`        | Verifies one sampled cell: hashes `cellData` with Poseidon2 and checks the concatenated Merkle path up to `slotRoot`.                                                        | `nFieldElemsPerCell, botDepth, maxDepth`                                | `slotRoot`, `data[nFieldElemsPerCell]`, `lastBits[maxDepth]`, `indexBits[maxDepth]`, `maskBits[maxDepth+1]`, `merklePath[maxDepth]`                                                             | -                     |
 | `RootFromMerklePath`     | Reconstructs a Merkle root from a leaf and path using `KeyedCompression`.                                                                                                    | `maxDepth`                                                              | `leaf`, `pathBits[maxDepth]`, `lastBits[maxDepth]`, `maskBits[maxDepth+1]`, `merklePath[maxDepth]`                                                                                              | `recRoot`             |
 | `CalculateCellIndexBits` | Derives the index bits for a sampled cell from `(entropy, slotRoot, counter)`, masked by `cellIndexBitMask`.                                                                 | `maxLog2N`                                                              | `entropy`, `slotRoot`, `counter`, `cellIndexBitMask[maxLog2N]`                                                                                                                                  | `indexBits[maxLog2N]` |
-
+Note: All parameters are compile-time constants that are defined when building the circuit. See Circuit specification section for more information on these parameters.
 
 **Circuit Utility Templates**
 
-| Template               | Description                                                                                             | Parameters                           | **Inputs (signals)** | **Outputs (signals)**         |
-| ---------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------ | -------------------- | ----------------------------- |
-| `Poseidon2_hash_rate2` | Poseidon2 fixed‑length hash (rate = 2). Used for hashing cell field‑elements.                           | `n`                                  | `inp[n]`             | `out`                         |
-| `PoseidonSponge`       | Generic Poseidon2 sponge (absorb/squeeze).                                                              | `t, capacity, input_len, output_len` | `inp[input_len]`     | `out[output_len]`             |
-| `KeyedCompression`     | Keyed 2->1 compression where $key \in \{0,1,2,3\}$ .                                                    | -                                    | `key`, `inp[2]`      | `out`                         |
-| `ExtractLowerBits`     | Extracts the lower `n` bits of `inp` (LSB‑first).                                                       | `n`                                  | `inp`                | `out[n]`                      |
-| `Log2`                 | Checks `inp == 2^out` with `0 < out <= n`. Also emits a mask vector with ones for indices `< out`.      | `n`                                  | `inp`                | `out`, `mask[n+1]`            |
-| `CeilingLog2`          | Computes `ceil(log2(inp))` and returns the bit‑decomposition and a mask.                                | `n`                                  | `inp`                | `out`, `bits[n]`, `mask[n+1]` |
-| `BinaryCompare`        | Compares two n‑bit numbers `A` and `B` (LSB‑first); outputs `-1` if `A<B`, `0` if equal, `+1` if `A>B`. | `n`                                  | `A[n]`, `B[n]`       | `out`                         |
+| Template               | Description                                                                                             | Parameters                                                                                                                                             | **Inputs (signals)**                                    | **Outputs (signals)**                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `Poseidon2_hash_rate2` | Poseidon2 fixed‑length hash (rate = 2). Used for hashing cell field‑elements.                           | `n`: number of field elements to hash.                                                                                                                 | `inp[n]`: array of field elements to hash.              | `out`: Poseidon2 hash digest.                                                          |
+| `PoseidonSponge`       | Generic Poseidon2 sponge (absorb/squeeze).                                                              | `t`: sponge state width , capacity: capacity part of the state, `input_len`: number of elements to absorb, `output_len`: number of elements to squeeze | `inp[input_len]`: field elements to absorb.             | `out[output_len]`: filed elements squeezed.                                            |
+| `KeyedCompression`     | Keyed 2->1 compression where $key \in \{0,1,2,3\}$ .                                                    | -                                                                                                                                                      | `key`, <br>`inp[2]`: left and right child node digests. | `out`: parent node digest                                                              |
+| `ExtractLowerBits`     | Extracts the lower `n` bits of `inp` (LSB‑first).                                                       | `n`: number of low bits to extract                                                                                                                     | `inp`: field elements to extract.                       | `out[n]`: extracted bits.                                                              |
+| `Log2`                 | Checks `inp == 2^out` with `0 < out <= n`. Also emits a mask vector with ones for indices `< out`.      | `n`: max allowed bit width.                                                                                                                            | `inp`: filed element.                                   | `out`: exponent,<br>`mask[n+1]`: prefix mask.                                          |
+| `CeilingLog2`          | Computes `ceil(log2(inp))` and returns the bit‑decomposition and a mask.                                | `n`: bit width of input and output.                                                                                                                    | `inp`: field element.                                   | `out`: `ceil(log2(inp))`,<br>`bits[n]`: bit decomposition,<br>`mask[n+1]`: prefix mask |
+| `BinaryCompare`        | Compares two n‑bit numbers `A` and `B` (LSB‑first); outputs `-1` if `A<B`, `0` if equal, `+1` if `A>B`. | `n`: bit width of `A` and `B`                                                                                                                          | `A[n]`, `B[n]`                                          | `out`: comparison result.                                                              |
 
 ## 3. Functional Requirements
 
@@ -113,7 +113,7 @@ Below are the main interfaces for each sub-component. The interfaces below omit 
 **Security & Correctness**
 - Soundness and completeness: only accept valid proofs, invalid inputs must not yield accepted proofs. 
 - Commitment integrity: proofs are checked against the publicly available Merkle commitments to the stored data.
-- Entropy binding: sample indices must be derived from the on-chain entropy and the slot commitment. 
+- Entropy binding: sample indices must be derived from the on-chain entropy and the slot commitment. This binds the proofs to specific cell indices and time period, and makes the challenge unpredictable until the period begins. This prevents SPs from precomputing the proofs or selectively retaining a set of cells.
 
 ## 5. Internal Behavior
 
@@ -140,7 +140,7 @@ In Codex, a dataset is split into `numSlots` slots which are the ones sampled. E
    - Build a Merkle tree of depth 5 over the 32 cell hashes. The root is the block hash.
 
 - Slot tree (block -> slot): 
-   - For all blocks in a slot, build a Merkle tree over their block hashes (root of block trees). The number of leaves is expected to be a power of two. The Slot tree root is the public commitment that is sampled. 
+   - For all blocks in a slot, build a Merkle tree over their block hashes (root of block trees). The number of leaves is expected to be a power of two (in Codex, the `SlotsBuilder` pads the slots). The Slot tree root is the public commitment that is sampled. 
 
 - Dataset tree (slot -> dataset):
    - Build a Merkle tree over the slot trees roots to obtain the dataset root (this is different from SHA-256 CID used for content addressing). The dataset root is the public commitment to all slots hosted by a single SP.
@@ -188,7 +188,7 @@ The sampler derives deterministic cell indices from the challenge entropy and th
 idx = H(entropy || slotRoot || counter) mod nCells
 ```
 
-where `counter = 1..nSamples` and `H` is the Poseidon2 sponge (rate = 2) with `10*` padding. The result is a sequence of distinct indices in `[0, nCells)`, identical for any honest party given the same `(entropy, slotRoot, nSamples)`.
+where `counter = 1..nSamples` and `H` is the Poseidon2 sponge (rate = 2) with `10*` padding. The result is a sequence of indices in `[0, nCells)`, identical for any honest party given the same `(entropy, slotRoot, nSamples)`. Note that there is a chance however small that you would have the multiple of the same cell index samples purely by chance. The chance of that depends on the slot and cell sizes, the larger the slot and smaller the cell, the lower the chance of landing on the same cell index. 
 
 **Generate per-sample data** 
    - Fetch the `cellData` via the `BlockStore` and `builder`, and fetch the stored `cell -> block`, `block -> slot`, `slot -> dataset` Merkle paths. Note that `cell -> block` can be build on the fly and `slot -> dataset` can be reused for all samples in that slot. 
