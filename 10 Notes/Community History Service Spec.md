@@ -308,7 +308,7 @@ Given a `WakuMessageArchiveIndex`, member nodes can access individual `WakuMessa
 Community member nodes MUST choose one of the following options:
 
 1. **Download all archives** - Request and download all data pieces for `data` provided by the torrent (this is the case for new community member nodes that haven't downloaded any archives yet)
-2. **Download only the latest archive** - Request and download all pieces starting at the `offset` of the latest `WakuMessageArchiveIndexMetadata` (this the case for any member node that already has downloaded all previous history and is now interested in only the latst archive)
+2. **Download only the latest archive** - Request and download all pieces starting at the `offset` of the latest `WakuMessageArchiveIndexMetadata` (this is the case for any member node that already has downloaded all previous history and is now interested in only the latst archive)
 3. **Download specific archives** - Look into `from` and `to` fields of every `WakuMessageArchiveIndexMetadata` and determine the pieces for archives of a specific time range (can be the case for member nodes that have recently joined the network and are only interested in a subset of the complete history)
 
 ### Storing historical messages
