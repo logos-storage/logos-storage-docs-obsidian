@@ -57,66 +57,79 @@ The current implementation has several shortcomings:
 
 ## 4. Functional Requirements
 
-**Atomic Block Operations**
+### Available Today
 
-- Store, retrieve, and delete operations must be atomic
-- Support retrieval via:
+- **Atomic Block Operations**
+  - Store, retrieve, and delete operations must be atomic.
+  - Support retrieval via:
     - Direct CID
-    - Tree-based addressing (`treeCid` + index)
+    - Tree-based addressing (`treeCid + index`)
     - Unified block address
 
-**Metadata Management**
+- **Metadata Management**
+  - Store protocol-level metadata (e.g., storage proofs, quota usage).
+  - Store block-level metadata (e.g., reference counts, total block count).
 
-- Store protocol-level metadata (e.g., sales data, storage proofs, quota usage)
-- Store block-level metadata (e.g., reference counts, total block count)
+- **Multi-Datastore Support**
+  - Pluggable datastore interface supporting various backends.
+  - Typed datastore operations for metadata type safety.
 
-**Multi-Datastore Support**
+- **Lifecycle & Maintenance**
+  - BlockMaintainer service for removing expired data.
+  - Configurable maintenance intervals (default: 10 min).
+  - Batch processing (default: 1000 blocks/cycle).
 
-- Pluggable datastore interface supporting various backends
-- Typed datastore operations for metadata type safety
-- Uniform API across implementations
+### Future Requirements
 
-**Lifecycle & Maintenance**
+- **Transaction Rollback & Error Recovery**
+  - Rollback support for failed multi-step operations.
+  - Consistent state restoration after failures.
 
-- **BlockMaintainer** service for removing expired data
-- Configurable maintenance intervals (default: 10 min)
-- Batch processing (default: 1000 blocks/cycle)
-- Cooperative scheduling to avoid blocking
-- State tracking for large datasets
+- **Dataset-Level Operations**
+  - Handle Dataset level meta data. 
+  - Batch operations for dataset block groups.
 
-**Transaction Rollback & Error Recovery**
+- **Concurrency Control**
+  - Consistent locking and coordination mechanisms to prevent inconsistencies during crashes or long-running operations.
 
-- Rollback for failed multi-step operations
-- Consistent state restoration after failures
+- **Lifecycle & Maintenance**
+  - Cooperative scheduling to avoid blocking.
+  - State tracking for large datasets.
 
 ---
 
 ## 5. Non-Functional Requirements
 
-**Performance**
+### Available Today
 
-- Batch metadata updates
-- Efficient key lookups with configurable prefix lengths
-- Lazy iteration and streaming for large datasets
-- Support for both fast and slower storage tiers
+- **Security**
+  - Verify block content integrity upon retrieval.
+  - Enforce quotas to prevent disk exhaustion.
+  - Safe orphaned data cleanup.
 
-**Security**
+- **Scalability**
+  - Configurable storage quotas (default: 20 GiB).
+  - Pagination for metadata queries.
+  - Reference counting–based garbage collection.
 
-- Verify block content integrity upon retrieval
-- Enforce quotas to prevent disk exhaustion
-- Safe orphaned data cleanup
+- **Reliability**
+  - Metrics collection (`codex_repostore_*`).
+  - Graceful shutdown with resource cleanup.
 
-**Scalability**
+### Future Requirements
 
-- Configurable storage quotas (default: 20 GiB)
-- Pagination for metadata queries
-- Reference counting–based garbage collection
+- **Performance**
+  - Batch metadata updates.
+  - Efficient key lookups with configurable prefix lengths.
+  - Support for both fast and slower storage tiers.
+  - Streaming APIs optimized for extremely large datasets.
 
-**Reliability**
+- **Security**
+  - Finer-grained quota enforcement across tenants/namespaces.
 
-- Metrics collection (`codex_repostore_*`)
-- Auto-recovery from inconsistent states
-- Graceful shutdown with resource cleanup
+- **Reliability**
+  - Stronger rollback semantics for multi-node consistency.
+  - Auto-recovery from inconsistent states.
 
 ---
 
@@ -222,7 +235,7 @@ This store maintains **two separate LRU caches**:
     - Acts as the primary cache for block content
 2. **CID/Proof Cache** — `LruCache[(Cid, Natural), (Cid, CodexProof)]`
     - Maps `(treeCid, index)` to `(blockCid, proof)`
-    - Enables efficient tree-based block access without re-fetching proofs
+    - Supports direct access to block proofs keyed by `treeCid` and index  
 
 **Characteristics**:
 
