@@ -8,15 +8,15 @@ The erasure coding module provides data redundancy and recovery capabilities. It
 The Codex implementation uses the Leopard library, but alternative Reed-Solomon implementations may be used as well.
 
 ### Scope
-- Encoding manifests into erasure-protected manifests using K data blocks + M parity blocks
-- Decoding erasure-protected manifests back to original data
+- Encoding datasets into erasure-protected formats using k data blocks + m parity blocks
+- Decoding erasure-protected datasets back to original data
 - Repairing incomplete or damaged datasets
 - Merkle tree generation and verification for data integrity
 
 ### Boundaries and Limitations
-- Requires at least K blocks to reconstruct original data
-- Dataset must be padded to have blocks aligned for interleaving
-- Maximum recovery capability limited to M missing blocks per column
+- Requires at least k blocks to reconstruct original data
+- Dataset must be padded to meet encoding requirements
+- Maximum recovery capability limited to m missing blocks
 - All blocks must be of uniform size within a manifest
 
 ## 2. Interfaces
@@ -26,9 +26,6 @@ The Codex implementation uses the Leopard library, but alternative Reed-Solomon 
 | `encode()` | Encodes a manifest into erasure-protected format | `manifest: Manifest`<br>`blocks: Natural` (K)<br>`parity: Natural` (M)<br>`strategy: StrategyType` (default: SteppedStrategy) | `Future[?!Manifest]` - Protected manifest with erasure coding metadata |
 | `decode()` | Decodes protected manifest to original | `encoded: Manifest` (must be protected) | `Future[?!Manifest]` - Original manifest reconstructed from available blocks |
 | `repair()` | Repairs a damaged protected manifest by reconstructing full dataset | `encoded: Manifest` (protected) | `Future[?!void]` - Success/failure status |
-| `new()` | Creates new Erasure instance | `store: BlockStore`<br>`encoderProvider: EncoderProvider`<br>`decoderProvider: DecoderProvider`<br>`taskPool: Taskpool` | `Erasure` instance |
-| `start()` | Starts the erasure service | None | `Future[void]` |
-| `stop()` | Stops the erasure service | None | `Future[void]` |
 
 ### Internal Helper Interfaces
 
@@ -40,67 +37,19 @@ The Codex implementation uses the Leopard library, but alternative Reed-Solomon 
 
 ## 3. Functional Requirements
 
-### 3.1 Systematic Reed-Solomon Erasure Coding
-- Generate M parity blocks from K data blocks using Reed-Solomon erasure coding
-- Use interleaving to encode blocks at the same position across shards
-- Support recovery with any K blocks from K+M total blocks
+### 3.1 Systematic Erasure Coding
+- Generate m parity blocks from k data blocks
+- Support recovery with any k blocks from k+m total blocks
 - Maintain systematic property where original data is readable without decoding
 - Ensure deterministic encoding
 
-### 3.2 Block Organization
-Erasure coding uses interleaving (SteppedStrategy) to encode data blocks. This works by taking blocks from the same position across multiple data shards and encoding them together:
-
-```
-Interleaving Process
---------------------
-
-Data shards (K=4 in this example):
-
-    -------------    -------------    -------------    -------------
-    |x| | | | | |    |x| | | | | |    |x| | | | | |    |x| | | | | |
-    -------------    -------------    -------------    -------------
-     |                /                /                |
-      \___________   |   _____________/                 |
-                  \  |  /  ____________________________/
-                   | | |  /
-                   v v v v
-                  
-                  ---------         ---------
-            data  |x|x|x|x|   -->   |p|p|p|p|  parity
-                  ---------         ---------
-                  
-                                     | | | |
-       _____________________________/ /  |  \_________
-      /                 _____________/   |             \
-     |                 /                /               |
-     v                v                v                v
-    -------------    -------------    -------------    -------------
-    |p| | | | | |    |p| | | | | |    |p| | | | | |    |p| | | | | |
-    -------------    -------------    -------------    -------------
-    
-Parity shards (M parity shards generated)
-```
-
-**Key concepts**:
-
-- **K**: Number of original data shards
-- **M**: Number of parity shards
-- **N**: Total shards (K + M)
-- **Steps**: Number of encoding iterations, one for each data block position
-
-The dataset is organized as:
-- **Rows**: K + M total
-- **Columns**: B blocks per row, where B = Steps
-- **Total blocks**: (K + M) x B blocks in the encoded dataset
-
-### 3.3 Data Recovery
-- Reconstruct missing data blocks from any K available blocks
-- Support partial column recovery - up to M blocks missing per column
+### 3.2 Data Recovery
+- Reconstruct missing data blocks from any k available blocks
 - Verify recovered data against original tree root (originalTreeCid)
 - Complete partial block downloads when recovery succeeds
 - Store recovered blocks back to BlockStore for future access
 
-### 3.4 Manifest Management
+### 3.3 Manifest Management
 - Transform unprotected manifests to protected manifests with erasure coding metadata
 - Preserve original metadata (filename, mimetype, dimensions)
 - Generate and store merkle tree proofs for all blocks
@@ -111,7 +60,6 @@ The dataset is organized as:
 
 ### Performance
 - **Latency**: Yield control periodically (10ms sleep) to prevent blocking
-- **Scalability**: Linear complexity with dataset size O(n)
 
 ### Reliability
 - **Error Handling**: 
@@ -124,7 +72,7 @@ The dataset is organized as:
 
 ### Scalability
 - Handle datasets of arbitrary size - limited only by storage
-- Support configurable erasure coding parameters (K, M)
+- Support configurable erasure coding parameters (k, m)
 - Thread pool size configurable based on system resources
 - Streaming block retrieval to avoid memory exhaustion
 
@@ -199,44 +147,81 @@ flowchart TD
     K -->|Match| M[Return Success]
 ```
 
-### 5.4 Data organization with interleaving
-The encoded dataset uses interleaving, where data blocks at the same position acrosss shards are processed together:
+### 5.4 Implementation Details
+#### Block Organization with Interleaving
+
+The encoded dataset uses interleaving, where data blocks at the same position acrosss groups are processed together:
+
+```
+Interleaving Process
+--------------------
+
+Data blocks (k=4 in this example):
+
+    -------------    -------------    -------------    -------------
+    |x| | | | | |    |x| | | | | |    |x| | | | | |    |x| | | | | |
+    -------------    -------------    -------------    -------------
+     |                /                /                |
+      \___________   |   _____________/                 |
+                  \  |  /  ____________________________/
+                   | | |  /
+                   v v v v
+                  
+                  ---------         ---------
+            data  |x|x|x|x|   -->   |p|p|p|p|  parity
+                  ---------         ---------
+                  
+                                     | | | |
+       _____________________________/ /  |  \_________
+      /                 _____________/   |             \
+     |                 /                /               |
+     v                v                v                v
+    -------------    -------------    -------------    -------------
+    |p| | | | | |    |p| | | | | |    |p| | | | | |    |p| | | | | |
+    -------------    -------------    -------------    -------------
+    
+Parity blocks (m parity blocks generated)
+```
+
+**Key concepts**:
+
+- **k**: Number of original data block groups
+- **m**: Number of parity block groups
+- **n**: Total block groups (k + m)
+- **Steps**: Number of encoding iterations, one for each data block position
+
+The dataset is organized as:
+- **Rows**: k + m total
+- **Columns**: B blocks per row, where B = Steps
+- **Total blocks**: (k + m) x B blocks in the encoded dataset
+
 
 ```
 Logical Organization with interleaving:
 
         Position 0   Position 1   ...   Position B-1
         ----------------------------------------
-Shard 0  | Block 0  | Block 1   | ... | Block B-1      | Data
-Shard 1  | Block B  | Block B+1 | ... | Block 2B-1     | Data
+Group 0  | Block 0  | Block 1   | ... | Block B-1      | Data
+Group 1  | Block B  | Block B+1 | ... | Block 2B-1     | Data
 ...      | ...      | ...       | ... | ...            | Data
-Shard K-1| Block (K-1)×B | ...  | ... | Block K×B-1    | Data
+Group k-1| Block (k-1)×B | ...  | ... | Block k×B-1    | Data
          |----------|-----------|-----|----------------|
-Shard K  | Parity 0 | Parity 1  | ... | Parity B-1     | Parity
-Shard K+1| Parity B | Parity B+1| ... | Parity 2B-1    | Parity
+Group k  | Parity 0 | Parity 1  | ... | Parity B-1     | Parity
+Group k+1| Parity B | Parity B+1| ... | Parity 2B-1    | Parity
 ...      | ...      | ...       | ... | ...            | Parity
-Shard K+M-1| Parity (M-1)×B |...| ... | Parity M×B-1   | Parity
+Group k+m-1| Parity (m-1)×B |...| ... | Parity m×B-1   | Parity
 
 where:
-- K = number of data shards
-- M = number of parity shards
-- B = number of positions (steps) per shard
+- k = number of data block groups
+- m = number of parity block groups
+- B = number of positions (steps) per block group
 - Each column represents one encoding step
 - Elements at the same position form an encoding group
 ```
 
 ## 6. Dependencies
 
-### 6.1 External Libraries
-| Dependency | Purpose | Version/Module |
-|------------|---------|----------------|
-| `pkg/chronos` | Async/await runtime, Future types | Threading, async operations |
-| `pkg/libp2p` | CID, multicodec, multihash operations | Content addressing |
-| `pkg/taskpools` | Thread pool management | Parallel processing |
-| `pkg/stew` | Utility functions (byteutils) | Helper operations |
-| `pkg/leopard` | Reed-Solomon erasure coding | Erasure coding module |
-
-### 6.2 Internal Components
+### 6.1 Internal Components
 | Component | Purpose | Interface |
 |-----------|---------|-----------|
 | `BlockStore` | Block storage and retrieval | `getBlock(cid/treeCid,index/address)`, `putBlock(blk,ttl)`, `completeBlock(address,blk)`, `putCidAndProof()`, `getCidAndProof()`, `hasBlock()`, `delBlock()` |
@@ -249,7 +234,7 @@ where:
 
 
 
-### 6.3 Helper Functions
+### 6.2 Helper Functions
 | Function | Purpose | Input | Output |
 |----------|---------|-------|---------|
 | `putSomeProofs()` | Store merkle proofs for specific indices | `store: BlockStore`<br>`tree: CodexTree`<br>`iter: Iter[int/Natural]` | `Future[?!void]` |
@@ -399,12 +384,6 @@ type
 
 ### 7.7 System Constants
 - **DefaultBlockSize**: 65536 bytes
-- **DefaultCellSize**: 2048 bytes
-- **DefaultMaxSlotDepth**: 32
-- **DefaultMaxDatasetDepth**: 8
-- **DefaultBlockDepth**: 5
-- **DefaultCellElms**: 67
-- **DefaultSamplesNum**: 5
 
 ### 7.8 Supported Hash Codecs
 - **Sha256HashCodec**: SHA2-256 hash function
