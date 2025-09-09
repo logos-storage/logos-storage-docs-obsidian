@@ -39,7 +39,7 @@ The function somehow central to the Archive creation is [InitHistoryArchiveTasks
 
 In `InitHistoryArchiveTasks`, for each community with `HistoryArchiveSupportEnabled` option set to `true`:
 
-- if community torrent file already exists: call [ArchiveManager.SeedHistoryArchiveTorrent](https://github.com/status-im/status-go/blob/6322f22783585474803cfc8a6f0a914757d763b5/protocol/communities/manager_archive.go#L408) - see also [[What is Seeding (AI)?]] and [[When are magnetlink messages sent?]].
+- if community torrent file already exists: call [ArchiveManager.SeedHistoryArchiveTorrent](https://github.com/status-im/status-go/blob/6322f22783585474803cfc8a6f0a914757d763b5/protocol/communities/manager_archive.go#L408) - see also [[What is Seeding (AI)]] and [[When are magnetlink messages sent]].
 - determine if new archives need to be created based on the last archive end date and call [CreateAndSeedHistoryArchive](https://github.com/status-im/status-go/blob/6322f22783585474803cfc8a6f0a914757d763b5/protocol/communities/manager_archive.go#L314)
 - starts periodic archive creation task by calling [StartHistoryArchiveTasksInterval](https://github.com/status-im/status-go/blob/6322f22783585474803cfc8a6f0a914757d763b5/protocol/communities/manager_archive.go#L323), which will in turn call [CreateAndSeedHistoryArchive](https://github.com/status-im/status-go/blob/6322f22783585474803cfc8a6f0a914757d763b5/protocol/communities/manager_archive.go#L314).
 
