@@ -77,8 +77,6 @@ The module operates both for new requests and for ongoing ones, such as when a s
 - Submit proofs periodically
 - React to events from the `marketplace`
 
-- React to events from the `marketplace`
-
 ### 3.3 Data Handling
 
 - Download and persist slot data via the `onStore` hook
@@ -109,9 +107,7 @@ The module operates both for new requests and for ongoing ones, such as when a s
 - **Observability**
   * Log all state transitions with `requestId`, `slotIndex`, and relevant identifiers (`slotId`, `reservationId`, `availabilityId`).
 - **Scalability**
-	* Dispatch a worker from the pool to handle concurrent sales state machine flows. Worker must be returned to pool after deterministic state machine result.
-**Scalability**
-- Dispatch a worker from the pool to handle concurrent sales state machine flows. Worker must be returned to pool after deterministic state machine result.
+  * Dispatch a worker from the pool to handle concurrent sales state machine flows. Worker must be returned to pool after deterministic state machine result.
 ## 5. Internal Behaviour
 
 ## 5.1 Main behaviour
