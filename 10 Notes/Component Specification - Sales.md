@@ -108,7 +108,8 @@ The module operates both for new requests and for ongoing ones, such as when a s
   * Log all state transitions with `requestId`, `slotIndex`, and relevant identifiers (`slotId`, `reservationId`, `availabilityId`).
 - **Scalability**
 	* Dispatch a worker from the pool to handle concurrent sales state machine flows. Worker must be returned to pool after deterministic state machine result.
-
+**Scalability**
+- Dispatch a worker from the pool to handle concurrent sales state machine flows. Worker must be returned to pool after deterministic state machine result.
 ## 5. Internal Behaviour
 
 ## 5.1 Main behaviour
