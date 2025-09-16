@@ -77,6 +77,8 @@ The module operates both for new requests and for ongoing ones, such as when a s
 - Submit proofs periodically
 - React to events from the `marketplace`
 
+- React to events from the `marketplace`
+
 ### 3.3 Data Handling
 
 - Download and persist slot data via the `onStore` hook
