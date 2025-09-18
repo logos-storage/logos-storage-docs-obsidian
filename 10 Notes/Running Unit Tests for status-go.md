@@ -339,3 +339,80 @@ DONE 2 tests in 0.307s
 
 > The *suite* counts as one test.
 
+### Running "protocol" tests
+
+I only run all the tests (including `protocol` tests) using `make test` once. Got most of the test pass, but not all. To get a better feedback and to track progress, I prefer to run them using `gotestsum` command:
+
+```bash
+gotestsum --packages="./protocol" -f testname --rerun-fails -- -count 1 -timeout "45m" -tags "gowaku_no_rln gowaku_skip_migrations" | tee "test_1.log"
+
+DONE 964 tests, 5 skipped in 1159.570s
+```
+
+Redirecting output to a file is pretty much needed as `protocol` tests generate more output.
+
+Here just for the record - an example failing session:
+
+```bash
+gotestsum --packages="./protocol" -f testname --rerun-fails -- -count 1 -timeout "45m" -tags "gowaku_no_rln gowaku_skip_migrations" | tee "test_1.log
+
+DONE 3 runs, 968 tests, 5 skipped, 6 failures in 1194.882s
+```
+
+So, the reason I recorded it, is that the output can be pretty misleading if you are seeing this output for the first time. The `6 failures` is actually $1$ (one) failing test:
+
+```bash
+TestMessengerCommunitiesTokenPermissionsSuite/TestAnnouncementsChannelPermissions
+```
+
+This one failing test makes the whole suite `TestMessengerCommunitiesTokenPermissionsSuite` failing which is also counted as a failure, and then we have `3 runs`  which is why we see $3 \times 2 = 6$ failures in the end.
+
+Also it is important to mention here that `--rerun-fails` option takes $2$ as default value, which means after first pass, if there are any failing tests, these tests will be rerun, and, if there are still some failing tests after second run, those tests will be rerun as well. So we have $3$ runs in total. Also notice, that the `-count 1` option we pass to the underlying `go test` ensures that each test execution is "fresh" and not cached making sure that it does not use cached results from previous test runs.
+
+On each rerun I am also observing the following error message:
+
+```bash
+failed to IncreaseLevel: invalid increase level, as level "fatal" is allowed by increased level, but not by existing core
+```
+
+This simply means that the logger (it seems to be [Zap logger](https://github.com/uber-go/zap)) tries to increase the log level before re-running failing tests, but apparently we are already at the max log level - thus the warning message.
+
+About this one failing test: `TestAnnouncementsChannelPermissions`.
+
+We see the following errors reported:
+
+```
+2025-09-17T07:01:42.088+0200	ERROR	6decc309-0976-4da3-ada2-d20566a30b02	node/node.go:386	error while mapping sync state	{"mvds": {"error": "sql: database is closed"}}
+ERROR	758f6b9d-fa86-44fd-851a-d727d8a57732	protocol/messenger.go:1802	can't post on chat	{"chatID": "0x03aa871de09ab76e4fba610c520735125f36795fb2ca6cb03f10520da449fcd0c5ab08e1bc-61bf-4ce6-82cb-e8c40f37abd2", "chatName": "general", "messageType": "CHAT_MESSAGE"}
+...
+ERROR	758f6b9d-fa86-44fd-851a-d727d8a57732	protocol/messenger.go:1802	can't post on chat	{"chatID": "0x03aa871de09ab76e4fba610c520735125f36795fb2ca6cb03f10520da449fcd0c5ab08e1bc-61bf-4ce6-82cb-e8c40f37abd2", "chatName": "general", "messageType": "CHAT_MESSAGE"}
+...
+    communities_messenger_token_permissions_test.go:1169: 
+        	Error Trace:	/home/mc2/code/status-im/status-go/protocol/communities_messenger_token_permissions_test.go:1169
+        	Error:      	Received unexpected error:
+        	            	no messages
+        	Test:       	TestMessengerCommunitiesTokenPermissionsSuite/TestAnnouncementsChannelPermissions
+
+    communities_messenger_token_permissions_test.go:1169: 
+        	Error Trace:	/home/mc2/code/status-im/status-go/protocol/communities_messenger_token_permissions_test.go:1169
+        	Error:      	Received unexpected error:
+        	            	no messages
+        	Test:       	TestMessengerCommunitiesTokenPermissionsSuite/TestAnnouncementsChannelPermissions
+# still some log messages
+--- FAIL: TestMessengerCommunitiesTokenPermissionsSuite/TestAnnouncementsChannelPermissions (11.44s)
+```
+
+When running this single test isolated, it is a bit flaky, sometimes it passes right away, sometimes it passes on the second run.
+
+```bash
+❯ gotestsum --packages="./protocol" -f testname --rerun-fails -- -count 1 -timeout "45m" -tags "gowaku_no_rln gowaku_skip_migrations" -run TestMessengerCommunitiesTokenPermissionsSuite/TestAnnouncementsChannelPermissions
+PASS protocol.TestMessengerCommunitiesTokenPermissionsSuite/TestAnnouncementsChannelPermissions (1.42s)
+PASS protocol.TestMessengerCommunitiesTokenPermissionsSuite (1.42s)
+PASS protocol
+
+DONE 2 tests in 1.453s
+
+❯ gotestsum --packages="./protocol" -f testname --rerun-fails -- -count 1 -timeout "45m" -tags "gowaku_no_rln gowaku_skip_migrations" -run TestMessengerCommunitiesTokenPermissionsSuite/TestAnnouncementsChannelPermissions
+...
+DONE 3 runs, 6 tests, 4 failures in 27.876s
+```
