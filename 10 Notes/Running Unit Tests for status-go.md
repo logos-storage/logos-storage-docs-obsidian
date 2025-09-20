@@ -121,9 +121,9 @@ The obvious
 make test
 ```
 
-is a mistery to me as looking at the source code, it looks it has no chance to succeed without some extra steps.
+a number of tests will most certainly. To understand the root cause, let's investigate a bit.
 
-`make test` uses `_assets/scripts/run_unit_tests.sh`, where we find the following fragment:
+`make test` uses `_assets/scripts/run_unit_tests.sh` under the hood, where we find the following fragment:
 
 ```bash
 if [[ $HAS_PROTOCOL_PACKAGE == 'false' ]]; then
@@ -144,14 +144,14 @@ else
 fi
 ```
 
-From the comments, we see that the `else` branch will be used. It is split into two parts:
+From the comments, we see that the `else` branch is currently used when running the tests. It splits running tests into two parts:
 
 1. All the tests except for the tests for `status-go/protocol` module, those are faster, which is reflected in the the shorter timeout: `DEFAULT_TIMEOUT_MINUTES=5`.
-2. The `protocol tests` - slower (`PROTOCOL_TIMEOUT_MINUTES=45`). By default `UNIT_TEST_COUNT=1`.
+2. The `protocol tests` - there are many of them (over 900) and can take longer to run (`PROTOCOL_TIMEOUT_MINUTES=45`). By default `UNIT_TEST_COUNT=1`, which means it tries to run the protocol tests only once.
 
-For our regular development, we may not like to run all tests. In particular, the `protocol` tests seem to be less relevant to our use case of message history archives. Thus, in what follows I am skipping the longer protocol tests.
+> The timeout variables `DEFAULT_TIMEOUT_MINUTES` and `PROTOCOL_TIMEOUT_MINUTES` are used as the value of the `-timeout` option passed down to `go test`. It limits the time all the tests are allowing to take.
 
-Now, if you run `make test` the tests will fail:
+We may observe more or less failures, depending on the run, but one test will consistently fail, even if we modify the script to only run non-protocol tests:  `TestBasicWakuV2`:
 
 ```bash
 === RUN   TestBasicWakuV2
@@ -163,7 +163,7 @@ Now, if you run `make test` the tests will fail:
 --- FAIL: TestBasicWakuV2 (0.00s)
 ```
 
-Indeed, we can confirm it by running just the `TestBasicWakuV2`:
+Let's try to run this test without using the `run_unit_tests.sh` script to confirm the problem:
 
 ```bash
 gotestsum --packages="./messaging/waku" -f testname --rerun-fails -- \
@@ -174,7 +174,7 @@ gotestsum --packages="./messaging/waku" -f testname --rerun-fails -- \
 
 and we will get the same error.
 
-If we look into source code of `messaging/waku/waku_test.go`, and scroll down a bit (!!), we will find the following comment:
+If we look into source code of `messaging/waku/waku_test.go` where `TestBasicWakuV2` is defined, and scroll down a bit (!!), we will find the following comment:
 
 ```go
 // In order to run these tests, you must run an nwaku node
@@ -257,7 +257,7 @@ PASS messaging/waku
 DONE 14 tests, 1 skipped in 33.720s
 ```
 
-Now, we should also be able to successfully run all the tests using `make test`:
+Now, we should also be able to successfully run all the non-protocol tests using `make test`:
 
 ```bash
 make test
@@ -341,7 +341,7 @@ DONE 2 tests in 0.307s
 
 ### Running "protocol" tests
 
-I only run all the tests (including `protocol` tests) using `make test` once. Got most of the test pass, but not all. To get a better feedback and to track progress, I prefer to run them using `gotestsum` command:
+When runing all the tests (including `protocol` tests) using `make test`, most of the tests pass, but not all. As already indicated above, in order to get a better feedback and to track progress, I prefer to run them using `gotestsum` command:
 
 ```bash
 gotestsum --packages="./protocol" -f testname --rerun-fails -- -count 1 -timeout "45m" -tags "gowaku_no_rln gowaku_skip_migrations" | tee "test_1.log"
@@ -349,9 +349,9 @@ gotestsum --packages="./protocol" -f testname --rerun-fails -- -count 1 -timeout
 DONE 964 tests, 5 skipped in 1159.570s
 ```
 
-Redirecting output to a file is pretty much needed as `protocol` tests generate more output.
+Redirecting output to a file using `tee` is pretty much needed as `protocol` tests may generate a lot of log messages.
 
-Here just for the record - an example failing session:
+Here - just for the record - an example failing session:
 
 ```bash
 gotestsum --packages="./protocol" -f testname --rerun-fails -- -count 1 -timeout "45m" -tags "gowaku_no_rln gowaku_skip_migrations" | tee "test_1.log
@@ -359,7 +359,7 @@ gotestsum --packages="./protocol" -f testname --rerun-fails -- -count 1 -timeout
 DONE 3 runs, 968 tests, 5 skipped, 6 failures in 1194.882s
 ```
 
-So, the reason I recorded it, is that the output can be pretty misleading if you are seeing this output for the first time. The `6 failures` is actually $1$ (one) failing test:
+So, the reason I recorded it here, is that the output can be pretty misleading if you are seeing this output for the first time. The `6 failures` is actually $1$ (one) failing test:
 
 ```bash
 TestMessengerCommunitiesTokenPermissionsSuite/TestAnnouncementsChannelPermissions
@@ -416,3 +416,5 @@ DONE 2 tests in 1.453s
 ...
 DONE 3 runs, 6 tests, 4 failures in 27.876s
 ```
+
+Thus, being able to run all the tests successfully a number of time, we should be allowed to conclude that our setup is correct.
