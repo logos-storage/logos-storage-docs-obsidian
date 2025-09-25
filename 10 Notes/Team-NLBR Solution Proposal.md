@@ -1,3 +1,11 @@
+---
+related-to:
+  - "[[Team-NLBR Solution Proposal]]"
+  - "[[status-go publishing magnet links]]"
+  - "[[status-go processing magnet links]]"
+  - "[[status-go-codex integration - design notes]]"
+  - "[[Creating History Archives - InitHistoryArchiveTasks]]"
+---
 The `TorrentConfig` type provides the configuration for the BitTorrent-based History Archive management functionality:
 
 ```go
@@ -113,9 +121,9 @@ wakuMessageArchiveIndex[archiveID] = wakuMessageArchiveIndexMetadata
 
 > `wakuMessageArchiveIndex` is earlier initialized to contain existing archive index entries from the current `index` file. Here we are basically appending new archive meta to the archive index data structure.
 
-We repeat the whole process for each message chunk in the given time period, adding more period if needed (recall, each period is 7 days long). 
+We repeat the whole process for each message chunk in the given time period, adding more periods if needed (recall, each period is 7 days long). 
 
-After that we have a list of new archives (in `encodedArchives`) and a new archive index entries. We are ready to be encoded and serialized to the corresponding `data` (by appending) and `index` files.
+After that we have a list of new archives (in `encodedArchives`) and a new archive index entries. They are ready to be encoded and serialized to the corresponding `data` (by appending) and `index` files.
 
 Finally, the corresponding torrent file is (re)created, the `HistoryArchivesCreatedSignal` is emitted, and the last message archive end date is recorded in the persistence.
 
@@ -153,7 +161,11 @@ type WakuMessageArchiveIndexMetadata struct {
 }
 ```
 
-We then upload the resulting `index` to Codex under its own `index` CID. Instead of the magnet link, the community owner only publishes this `index` CID.
+Now instead of appending each new archive to the data file, we stream each single archive to codex via an API call. For each archive, we receive a CID back from Codex, which we then add to the corresponding archive index metadata entry as defined above.
+
+After all archive entries are persisted, we then upload the resulting `index` to Codex under its own `index` CID. Instead of the magnet link, the community owner only publishes this `index` CID.
+
+> If the system fails to publish the index, we assume the archive publishing was unsuccessful and we will start from scratch after restart (to be checked). In other words, we do not have test is torrent file exists. If the previous publishing was successful, then the CIDs are advertised by Codex - they will already stored in the Codex RepoStore.
 
 In order to receive the historical messages for the given period (given by `from` and `to` in the `WakuMessageArchiveMetadata`), the receiving node first acquires the `index` using the `index` CID. For each entry in the `index` that the node has interest in, the node then downloads the corresponding archive directly using the `Cid` from this `index` entry.
 

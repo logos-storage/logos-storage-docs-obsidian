@@ -22,6 +22,12 @@ Plus, and what the original documentation does not say, you will need `gotestsum
 go install gotest.tools/gotestsum@latest
 ```
 
+or to use specific version (`v1.13.0` was the most recent while writing this doc):
+
+```bash
+go install gotest.tools/gotestsum@v1.13.0
+```
+
 You can check it is available by running:
 
 ```bash
@@ -29,8 +35,57 @@ gotestsum --version
 gotestsum version dev
 ```
 
-> `dev` version may be coming from using `@latest` when installing `gotestsum`.
+`dev` version comes from using `@latest` when installing `gotestsum`. If you installed a concrete version, you will see:
 
+```bash
+gotestsum --version
+gotestsum version v1.13.0
+```
+
+You may also manually install go Protobuf compiler: `protoc`. I have followed the instructions from [Protocol Buffer Compiler Installation](https://protobuf.dev/installation/).
+
+The following bash script (Arch Linux) can come in handy:
+
+```bash
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "installing go..."
+
+sudo pacman -S --noconfirm --needed go
+
+echo "installing go protoc compiler"
+
+PB_REL="https://github.com/protocolbuffers/protobuf/releases"
+VERSION="32.1"
+FILE="protoc-${VERSION}-linux-x86_64.zip"
+
+# 1. create a temp dir
+TMP_DIR="$(mktemp -d)"
+
+# ensure cleanup on exit
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+echo "Created temp dir: $TMP_DIR"
+
+# 2. download file into temp dir
+curl -L -o "$TMP_DIR/$FILE" "$PB_REL/download/v$VERSION/$FILE"
+
+# 3. unzip into ~/.local/share/go
+mkdir -p "$HOME/.local/share/go"
+unzip -o "$TMP_DIR/$FILE" -d "$HOME/.local/share/go"
+
+# 4. cleanup handled automatically by trap
+echo "protoc $VERSION installed into $HOME/.local/share/go"
+```
+
+After that make sure that `$HOME/.local/share/go/bin` is in your path, and you should get:
+
+```bash
+protoc --version
+libprotoc 32.1
+```
 ### Building backend and the libs
 
 Just to check if everything is setup correctly, let's build `status-backend` (which is a wrapper over status-go that provides web API - handy for testing), and then status-go static and shared libraries:
