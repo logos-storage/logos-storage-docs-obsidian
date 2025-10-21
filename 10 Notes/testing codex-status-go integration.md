@@ -1,4 +1,87 @@
-First some low level simple manual tests.
+---
+related-to:
+  - "[[status-go-codex integration - design notes]]"
+---
+
+There is one test in status-go that has slightly more end-to-end nature. It is from the `protocol` package:
+
+```
+protocol/communities_messenger_token_permissions_test.go
+```
+
+I will be creating an updated version of this test **AFTER** testing lower levels of the stack.
+
+The plan is as follows:
+
+1. More isolated tests of the CodexClient abstraction. There is a separate small utility project, where CodexClient can be exercised against the Codex client. I thought it may be easier this way to test the integration with the Codex library. The project repo url is: [codex-storage/go-codex-client](https://github.com/codex-storage/go-codex-client). Most of the tests from this project will be ported to the working branch where the main integration work takes place: `status-go-codex-integraion` in the [status-im/status-go](https://github.com/status-im/status-go) repo.
+2. Tests of `protocol/communities/codex_index_downloader.go` and `protocol/communities/codex_archive_downloader.go`.
+3. The "Codex" version of the above mentioned "integration" test.
+
+After that we should be ready for the cluster testing. If needed, we can also try to run status-desktop locally.
+
+### Some early notes on the "integration" test
+
+This is about step 3 above: "Codex" version of `protocol/communities_messenger_token_permissions_test.go`.
+
+The test we are particularly interested in - `TestImportDecryptedArchiveMessages` - first creates a community and sets up the corresponding permissions. Then the community owner sends a message to the community and then immediately retrieves it so that it is now recorded in the DB.
+
+After that it prepares archive parameters: `startDate`, `endDate`, `partition`, and community `topics`. All those will be passed to `CreateHistoryArchiveTorrentFromDB` - our entry point to creating history archive torrent.
+
+```go
+// 1.1. Create community
+community, chat := s.createCommunity()
+// ...
+// 1.2. Setup permissions
+// ...
+// 2. Owner: Send a message A
+messageText1 := RandomLettersString(10)
+message1 := s.sendChatMessage(s.owner, chat.ID, messageText1)
+
+// 2.2. Retrieve own message (to make it stored in the archive later)
+_, err = s.owner.RetrieveAll()
+s.Require().NoError(err)
+
+// 3. Owner: Create community archive
+const partition = 2 * time.Minute
+messageDate := time.UnixMilli(int64(message1.Timestamp))
+startDate := messageDate.Add(-time.Minute)
+endDate := messageDate.Add(time.Minute)
+topic := messagingtypes.BytesToContentTopic(messaging.ToContentTopic(chat.ID))
+communityCommonTopic := messagingtypes.BytesToContentTopic(messaging.ToContentTopic(community.UniversalChatID()))
+topics := []messagingtypes.ContentTopic{topic, communityCommonTopic}
+
+torrentConfig := params.TorrentConfig{
+	Enabled:    true,
+	DataDir:    os.TempDir() + "/archivedata",
+	TorrentDir: os.TempDir() + "/torrents",
+	Port:       0,
+}
+
+// Share archive directory between all users
+s.owner.archiveManager.SetTorrentConfig(&torrentConfig)
+s.bob.archiveManager.SetTorrentConfig(&torrentConfig)
+s.owner.config.messengerSignalsHandler = &MessengerSignalsHandlerMock{}
+s.bob.config.messengerSignalsHandler = &MessengerSignalsHandlerMock{}
+```
+
+Finally we call the `CreateHistoryArchiveTorrentFromDB`:
+
+```go
+archiveIDs, err := s.owner.archiveManager.CreateHistoryArchiveTorrentFromDB(community.ID(), topics, startDate, endDate, partition, community.Encrypted())
+s.Require().NoError(err)
+s.Require().Len(archiveIDs, 1)
+```
+
+Notice, there is one archive expected.
+
+The `CreateHistoryArchiveTorrentFromDB` is called directly here, in a way bypassing the torrent seeding: in normal flow `CreateHistoryArchiveTorrentFromDB` is called in `CreateAndSeedHistoryArchive` which immediately after creating the archive, calls `SeedHistoryArchiveTorrent`.  `CreateHistoryArchiveTorrentFromDB` calls `createHistoryArchiveTorrent` - which is central to the archive creating.
+
+TBC...
+
+
+### Isolated tests of the CodexClient abstraction
+
+> The text in this section is basically a copy of README from [codex-storage/go-codex-client](https://github.com/codex-storage/go-codex-client).
 
 We will be running codex client, and then use a small testing utility to check if the low level abstraction - CodexClient - correctly uploads and downloads the content.
 ### Running CodexClient
@@ -88,3 +171,10 @@ To run the integration test, use `integration` tag and narrow the scope using `-
 ```bash
 go test -v -tags=integration ./communities -run Integration -timeout 15s
 ```
+
+To make sure that the test is actually run and not cached, use `count` option:
+
+```bash
+go test -v -tags=integration ./communities -run Integration -timeout 15s -count 1
+```
+
