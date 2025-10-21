@@ -96,7 +96,7 @@ SeedHistoryArchiveTorrent()
     ↓
 publisher.publish(HistoryArchivesSeedingSignal) [internal event]
     ↓
-handleCommunitiesHistoryArchivesSubscription() [event handler]
+`handleCommunitiesHistoryArchivesSubscription`() [event handler]
     ↓
 IF community.IsControlNode():
     dispatchMagnetlinkMessage(communityID)

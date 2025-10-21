@@ -6,7 +6,6 @@ related-to:
   - "[[status-go-codex integration - design notes]]"
   - "[[Creating History Archives - InitHistoryArchiveTasks]]"
 ---
-
 ## Codex for History Archives
 
 As indicated in the [[Team-NLBR Solution Proposal]], the central entry point to the history management is [InitHistoryArchiveTasks](https://github.com/status-im/status-go/blob/6322f22783585474803cfc8a6f0a914757d763b5/protocol/messenger_communities.go#L3783). `InitHistoryArchiveTasks` is called from **two main places**:
@@ -197,7 +196,102 @@ path.Join(m.torrentConfig.DataDir, "codex", communityID, "data")
 
 This data file is temporary and will be overwritten for each new archive created. With Codex, we do not have to append, thus, we do not need the previous data file anymore. We just use file now, because it may be easier to start it this way.
 
-This is done with `LoadHistoryArchiveIndexFromFile`
+Now, just for convenience, let's recall the original data structures involved:
+
+![[team-nl-br-design-1.svg]]
+
+The data structures using with BitTorrent are:
+
+```go
+wakuMessageArchiveIndexProto := &protobuf.WakuMessageArchiveIndex{}
+wakuMessageArchiveIndex := make(map[string]*protobuf.WakuMessageArchiveIndexMetadata)
+```
+
+The original BitTorrent index, stored in `wakuMessageArchiveIndexProto`, is initially populated using `LoadHistoryArchiveIndexFromFile` function. After that `wakuMessageArchiveIndex` is used as temporary storage so that we can conveniently extend it with new entries and serialize it to protobuf afterwords. We use the contents of `wakuMessageArchiveIndexProto` to set it up:
+
+```go
+for hash, metadata := range wakuMessageArchiveIndexProto.Archives {
+	offset = offset + metadata.Size
+	wakuMessageArchiveIndex[hash] = metadata
+}
+```
+
+For the codex extension we proceed in the analogous way:
+
+![[replacing-bittorrent-with-codex-in-status-go-1.svg]]
+
+![[replacing bittorrent with codex in status-go-2.svg]]
+
+```go
+codexWakuMessageArchiveIndexProto := &protobuf.CodexWakuMessageArchiveIndex{}
+	codexWakuMessageArchiveIndex := make(map[string]*protobuf.CodexWakuMessageArchiveIndexMetadata)
+```
+
+and then:
+
+```go
+for hash, metadata := range codexWakuMessageArchiveIndexProto.Archives {
+	codexWakuMessageArchiveIndex[hash] = metadata
+}
+```
+
+Having those variables in place and initialized correctly, we enter the loop and start creating archives one by one.
+
+Basically, we proceed in the same way as with BitTorrent - the `WakuMessageArchive` type does not change.
+
+At some point, we arrive at:
+
+```go
+wakuMessageArchiveIndexMetadata := &protobuf.WakuMessageArchiveIndexMetadata{
+	Metadata: wakuMessageArchive.Metadata,
+	Offset:   offset,
+	Size:     uint64(size),
+	Padding:  uint64(padding),
+}
+```
+
+For Codex extension, we do not have `offset`, `size`, and `padding` any more as this is something that Codex will take care - but this is the moment we need to call into Codex, to upload the archive and get the corresponding CID back so that we can properly initialize the corresponding index entry:
+
+```go
+client := NewCodexClient("localhost", "8080") // make this configurable
+cid, err := client.UploadArchive(encodedArchive)
+if err != nil {
+		m.logger.Error("failed to upload to codex", zap.Error(err))
+		return codexArchiveIDs, err
+}
+
+m.logger.Debug("uploaded to codex", zap.String("cid", cid))
+
+codexWakuMessageArchiveIndexMetadata := &protobuf.CodexWakuMessageArchiveIndexMetadata{
+		Metadata: wakuMessageArchive.Metadata,
+		Cid:      cid,
+}
+
+codexWakuMessageArchiveIndexMetadataBytes, err := proto.Marshal(codexWakuMessageArchiveIndexMetadata)
+if err != nil {
+	return codexArchiveIDs, err
+}
+
+codexArchiveID := crypto.Keccak256Hash(codexWakuMessageArchiveIndexMetadataBytes).String()
+codexArchiveIDs = append(codexArchiveIDs, codexArchiveID)
+codexWakuMessageArchiveIndex[codexArchiveID] = codexWakuMessageArchiveIndexMetadata
+```
+
+where `CodexClient` is a helper that encapsulates uploading arbitrary data to a Codex client via `/api/codex/v1/data` API. The corresponding `curl` call would be similar to:
+
+```bash
+curl -X POST \
+  http://localhost:${PORT}/api/codex/v1/data \
+  -H 'Content-Type: application/octet-stream' \
+  -H 'Content-Disposition: filename="archive-data.bin"' \
+  -w '\n' \
+  -T archive-data.bin
+zDvZRwzm22eSYNdLBuNHVi7jSTR2a4n48yy4Ur9qws4vHV6madiz
+```
+
+At this stage we have an individual archive uploaded to Codex (it should be save there now) It is already being advertised but nobody is looking for it yet as we did not finish building the Codex-aware index file, which contains CIDs for all the archives.
+
+
 ## Testing
 
 There will be a number of tests that will need to adjust or fix.

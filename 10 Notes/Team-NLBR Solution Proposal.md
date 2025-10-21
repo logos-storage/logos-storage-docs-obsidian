@@ -5,6 +5,7 @@ related-to:
   - "[[status-go processing magnet links]]"
   - "[[status-go-codex integration - design notes]]"
   - "[[Creating History Archives - InitHistoryArchiveTasks]]"
+  - "[[testing codex-status-go integration]]"
 ---
 The `TorrentConfig` type provides the configuration for the BitTorrent-based History Archive management functionality:
 
