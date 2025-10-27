@@ -1,3 +1,8 @@
+---
+related-to:
+  - "[[Running tests with gotestsum]]"
+  - "[[go testify assertions]]"
+---
 Let's start with what we find in the [status-go build instructions](https://github.com/status-im/status-go/blob/develop/_docs/how-to-build.md) as lots of things just work.
 
 We have two options: (1) use the [nix](https://nixos.org/) develop shell or (2) just use standard shell you have in your shell. Theoretically, nix should give you better isolation and repeatability, yet, it is quite opinionated, has learning curve, and adds quite a bit complexity. For now thus, I decided to a more conservative shell environment, where I feel more comfortable.
@@ -86,6 +91,54 @@ After that make sure that `$HOME/.local/share/go/bin` is in your path, and you s
 protoc --version
 libprotoc 32.1
 ```
+
+#### go-zerokit-rln-x86_64 vendoring problem
+
+If you try to run the tests for the first time, you may face the following error:
+
+```bash
+gotestsum --packages="./protocol/communities" -f standard-verbose --rerun-fails -- -v -run "TestCodexClientTestSuite" -count 1
+FAIL    github.com/status-im/status-go/protocol/communities [setup failed]
+
+=== Failed
+=== FAIL: protocol/communities  (0.00s)
+FAIL    github.com/status-im/status-go/protocol/communities [setup failed]
+
+=== Errors
+vendor/github.com/waku-org/go-zerokit-rln/rln/link/x86_64.go:8:8: cannot find module providing package github.com/waku-org/go-zerokit-rln-x86_64/rln: import lookup disabled by -mod=vendor
+
+        (Go version in go.mod is at least 1.14 and vendor directory exists.)
+
+
+DONE 0 tests, 1 failure, 1 error in 0.000s
+ERROR rerun aborted because previous run had errors
+```
+
+The problem can be outlined as follows:
+
+1. **The package *IS* declared in dependencies**: 
+   - `go.mod` has: `github.com/waku-org/go-zerokit-rln-x86_64 v0.0.0-20230916171518-2a77c3734dd1 // indirect`
+   - `modules.txt` lists it as *vendored*
+2. **BUT it's excluded from git**:
+   - `.gitignore` has: `vendor/github.com/waku-org/go-zerokit-rln-x86_64/`
+   - as the result. the actual vendor directory is **missing** from your file system
+3. **Why it's excluded**: these seems to platform-specific native libraries (RLN - Rate Limiting Nullifier) with binary/compiled components that are large and platform-specific. The project excludes them from version control.
+4. **The build tag restriction**: The file x86_64.go has build tags:
+   `//go:build (linux || windows) && amd64 && !android`
+   
+   So it only compiles on x86_64 Linux/Windows, but when it tries to compile, it needs the vendored package.
+
+#### The Solution
+
+We need to vendor the missing dependencies:
+
+```bash
+# This will download the missing vendored dependencies
+go mod vendor
+```
+
+This will populate the `vendor/github.com/waku-org/go-zerokit-rln-x86_64/` directory with the necessary files, even though they're gitignored.
+
 ### Building backend and the libs
 
 Just to check if everything is setup correctly, let's build `status-backend` (which is a wrapper over status-go that provides web API - handy for testing), and then status-go static and shared libraries:
