@@ -92,6 +92,56 @@ protoc --version
 libprotoc 32.1
 ```
 
+Then also the `protoc-gen-go` plugin is required to generate Go code from `.proto` files. 
+
+Install it with:
+
+```bash
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.1
+```
+
+Make sure `$(go env GOPATH)/bin` is in your `$PATH` so protoc can find the plugin.
+
+Verify the installation:
+
+```bash
+which protoc-gen-go
+protoc-gen-go --version
+# Should output: protoc-gen-go v1.34.1
+```
+### notes on regenerating mocks
+
+In order to regenerate mocks you will need `mockgen`. You would expect that `make status-go-deps` did it, but it did not...
+
+You can install it with:
+
+```bash
+go install go.uber.org/mock/mockgen
+```
+
+> Also make sure you have `$(go env GOPATH)/bin` in your PATH. Otherwise
+   make sure you have something like `export PATH="$PATH:$(go env GOPATH)/bin"` 
+   in your `~/.bashrc` (adjusted to your SHELL and OS version). 
+   This should be part of your standard GO installation.
+
+If everything works well, you should see something like:
+
+```bash
+❯ which mockgen && mockgen -version
+/home/<your-user-name>/go/bin/mockgen
+v0.6.0
+```
+
+If everything seems to be under control, we can now proceed with actual generation, e.g. for the mocks relevant to `protocol/communites`:
+
+```bash
+go generate ./protocol/communities
+```
+
+The related mocks - if any - should be (re) generated.
+
+> Notice that `mock` folders are git ignored in status-go.
+
 #### go-zerokit-rln-x86_64 vendoring problem
 
 If you try to run the tests for the first time, you may face the following error:
