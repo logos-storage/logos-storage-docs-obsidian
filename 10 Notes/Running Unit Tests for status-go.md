@@ -426,7 +426,7 @@ Generating HTML coverage report
 Testing finished
 ```
 
-Following the practice from running [[Running functional tests in development]], also here we have a handy script for starting a waku node suitable for unit testing:
+Following the practice from running [[Running functional tests in status-go]], also here we have a handy script for starting a waku node suitable for unit testing:
 
 ```bash
 _assets/scripts/run_waku.sh

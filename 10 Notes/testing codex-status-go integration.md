@@ -2,16 +2,19 @@
 related-to:
   - "[[status-go-codex integration - design notes]]"
 ---
+In [[Running Unit Tests for status-go]] we provide general notes on running unit tests in the status-go project. And then we have a similar note about functional tests in [[Running functional tests in status-go]].
 
-There is one test in status-go that has slightly more end-to-end nature. It is from the `protocol` package:
+In this document, we focus on our Codex extension to status-go and here we focus on the related unit and integration tests.
+
+There is one existing test in status-go that has slightly more end-to-end nature. It is from the `protocol` package:
 
 ```
 protocol/communities_messenger_token_permissions_test.go
 ```
 
-I will be creating an updated version of this test **AFTER** testing lower levels of the stack.
+We will be providing an updated version of this test **AFTER** testing lower levels of the stack.
 
-The plan is as follows:
+Thus, the plan is as follows:
 
 1. More isolated tests of the CodexClient abstraction. There is a separate small utility project, where CodexClient can be exercised against the Codex client. I thought it may be easier this way to test the integration with the Codex library. The project repo url is: [codex-storage/go-codex-client](https://github.com/codex-storage/go-codex-client). Most of the tests from this project will be ported to the working branch where the main integration work takes place: `status-go-codex-integraion` in the [status-im/status-go](https://github.com/status-im/status-go) repo.
 2. Tests of `protocol/communities/codex_index_downloader.go` and `protocol/communities/codex_archive_downloader.go`.
@@ -19,7 +22,256 @@ The plan is as follows:
 
 After that we should be ready for the cluster testing. If needed, we can also try to run status-desktop locally.
 
-### Some early notes on the "integration" test
+So in this document we first document running unit and integration tests for the three major abstractions we introduced to status-go:
+
+- CodexClient
+- CodexIndexDownloader
+- CodexArchiveDownloader
+
+They are comprehensively tested in the [codex-storage/go-codex-client](https://github.com/codex-storage/go-codex-client) repo, but then they are integrated into the status-go. It is easy to figure out how to run the corresponding tests by just adjusting the commands in the above mentioned [codex-storage/go-codex-client](https://github.com/codex-storage/go-codex-client) repo, but for completeness, we present the updated content below.
+
+### Regenerating artifacts
+
+In [codex-storage/go-codex-client](https://github.com/codex-storage/go-codex-client) we include all the generated artifacts. In status-go, they are not included in the version control. Thus, what is optional in [codex-storage/go-codex-client](https://github.com/codex-storage/go-codex-client), here is obligatory to do before you will be able to run the tests.
+
+There are two artifacts that need to be updated:
+
+- the protobuf
+- the mocks
+
+For the first one - protobuf - you need two components:
+1. **`protoc`** - the Protocol Buffer compiler itself
+2. **`protoc-gen-go`** - the Go plugin for protoc that generates `.pb.go` files
+
+#### Installing protoc
+
+I have followed the instructions from [Protocol Buffer Compiler Installation](https://protobuf.dev/installation/).
+
+The following bash script (Arch Linux) can come in handy:
+
+```bash
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "installing go..."
+
+sudo pacman -S --noconfirm --needed go
+
+echo "installing go protoc compiler"
+
+PB_REL="https://github.com/protocolbuffers/protobuf/releases"
+VERSION="32.1"
+FILE="protoc-${VERSION}-linux-x86_64.zip"
+
+# 1. create a temp dir
+TMP_DIR="$(mktemp -d)"
+
+# ensure cleanup on exit
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+echo "Created temp dir: $TMP_DIR"
+
+# 2. download file into temp dir
+curl -L -o "$TMP_DIR/$FILE" "$PB_REL/download/v$VERSION/$FILE"
+
+# 3. unzip into ~/.local/share/go
+mkdir -p "$HOME/.local/share/go"
+unzip -o "$TMP_DIR/$FILE" -d "$HOME/.local/share/go"
+
+# 4. cleanup handled automatically by trap
+echo "protoc $VERSION installed into $HOME/.local/share/go"
+```
+
+After that make sure that `$HOME/.local/share/go/bin` is in your path, and you should get:
+
+```bash
+protoc --version
+libprotoc 32.1
+```
+
+#### Installing protoc-gen-go
+
+The `protoc-gen-go` plugin is required to generate Go code from `.proto` files. 
+Install it with:
+
+```bash
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.1
+```
+
+Make sure `$(go env GOPATH)/bin` is in your `$PATH` so protoc can find the plugin.
+
+Verify the installation:
+
+```bash
+which protoc-gen-go
+protoc-gen-go --version
+# Should output: protoc-gen-go v1.34.1
+```
+
+#### Installing mockgen
+
+In order to regenerate mocks you will need `mockgen`.
+
+You can install it with:
+
+```bash
+go install go.uber.org/mock/mockgen
+```
+
+> Also make sure you have `$(go env GOPATH)/bin` in your PATH. Otherwise
+   make sure you have something like `export PATH="$PATH:$(go env GOPATH)/bin"` 
+   in your `~/.bashrc` (adjusted to your SHELL and OS version). 
+   This should be part of your standard GO installation.
+
+If everything works well, you should see something like:
+
+```bash
+❯ which mockgen && mockgen -version
+/home/<your-user-name>/go/bin/mockgen
+v0.6.0
+```
+
+If everything seems to be under control, we can now proceed with actual generation.
+
+The easiest way is to regenerate all in one go:
+
+```bash
+go generate ./...
+```
+
+If you just need to regenerate the mocks:
+
+```bash
+go generate ./protocol/communities
+```
+
+If you just need to regenerate the protobuf:
+
+```bash
+go generate ./protobuf
+```
+
+> If you run `make`, e.g. `make statusgo-library`, the correct `generate` commands for the protobuf will be run for you. So in practice, you may not need to run `go generate ./protobuf` manually yourself - but for reference, why not... let's break something ;).
+
+### Running unit tests for Codex abstractions
+
+We have some unit tests and a couple of integration tests.
+
+In this section we focus on the unit tests. The integration tests are covered in the
+next section.
+
+To run all unit tests:
+
+```bash
+❯ go test -v ./protocol/communities -count 1
+```
+
+To be more selective, e.g. in order to run all the tests from 
+`CodexArchiveDownloaderSuite`, run:
+
+```bash
+go test -v ./protocol/communities -run CodexArchiveDownloader -count 1
+```
+
+or for an individual test from that suite:
+
+```bash
+go test -v ./protocol/communities -run TestCodexArchiveDownloaderSuite/TestCancellationDuringPolling -count 1
+```
+
+You can also use `gotestsum` to run the tests (you may need to install it first, e.g. `go install gotest.tools/gotestsum@v1.13.0`):
+
+```bash
+gotestsum --packages="./protocol/communities" -f testname --rerun-fails -- -count 1
+```
+
+For a more verbose output including logs use `-f standard-verbose`, e.g.:
+
+```bash
+gotestsum --packages="./protocol/communities" -f standard-verbose --rerun-fails -- -v -count 1
+```
+
+To be more selective, e.g. in order to run all the tests from 
+`CodexArchiveDownloaderSuite`, run:
+
+```bash
+gotestsum --packages="./protocol/communities" -f testname --rerun-fails -- -run CodexArchiveDownloader -count 1
+```
+
+or for an individual test from that suite:
+
+```bash
+gotestsum --packages="./protocol/communities" -f testname --rerun-fails -- -run TestCodexArchiveDownloaderSuite/TestCancellationDuringPolling -count 1
+```
+
+Notice, that the `-run` flag accepts a regular expression that matches against the full test path, so you can be more concise in naming if necessary, e.g.:
+
+```bash
+gotestsum --packages="./protocol/communities" -f testname --rerun-fails -- -run CodexArchiveDownloader/Cancellation -count 1
+```
+
+This also applies to native `go test` command.
+
+### Running integration tests
+
+When building Codex client for testing like here, I often remove some logging noise, by slightly changing the build params in `build.nims`:
+
+```nim
+task codex, "build codex binary":
+  buildBinary "codex",
+    # params = "-d:chronicles_runtime_filtering -d:chronicles_log_level=TRACE"
+    params =
+      "-d:chronicles_runtime_filtering -d:chronicles_log_level=TRACE -d:chronicles_enabled_topics:restapi:TRACE,node:TRACE"
+```
+
+You see a slightly more selective `params` in the `codex` task.
+
+To start Codex client, use e.g.:
+
+```bash
+./build/codex --data-dir=./data-1 --listen-addrs=/ip4/127.0.0.1/tcp/8081 --api-port=8001 --nat=none --disc-port=8091 --log-level=TRACE
+```
+
+To run the integration test, use `codex_integration` tag and narrow the scope using `-run Integration`:
+
+```bash
+CODEX_API_PORT=8001 go test -v -tags=codex_integration ./protocol/communities -run Integration -timeout 15s
+```
+
+This will run all integration tests, including `CodexClient` integration tests.
+
+To make sure that the test is actually run and not cached, use `count` option:
+
+```bash
+CODEX_API_PORT=8001 go test -v -tags=codex_integration ./protocol/communities -run Integration -timeout 15s -count 1
+```
+
+To be more specific and only run the tests related to, e.g. index downloader or archive
+downloader you can use:
+
+```bash
+CODEX_API_PORT=8001 go test -v -tags=codex_integration ./protocol/communities -run CodexIndexDownloaderIntegration -timeout 15s -count 1
+
+CODEX_API_PORT=8001 go test -v -tags=codex_integration ./protocol/communities -run CodexArchiveDownloaderIntegration -timeout 15s -count 1
+```
+
+and then, if you prefer to use `gotestsum`:
+
+```bash
+CODEX_API_PORT=8001 gotestsum --packages="./protocol/communities" -f standard-verbose --rerun-fails -- -tags=codex_integration -run CodexIndexDownloaderIntegration -v -count 1
+
+CODEX_API_PORT=8001 gotestsum --packages="./protocol/communities" -f standard-verbose --rerun-fails -- -tags=codex_integration -run CodexArchiveDownloaderIntegration -v -count 1
+```
+
+or to run all integration tests (including `CodexClient` integration tests):
+
+```bash
+CODEX_API_PORT=8001 gotestsum --packages="./protocol/communities" -f standard-verbose --rerun-fails -- -tags=codex_integration -v -count 1 -run Integration
+```
+
+I prefer to be more selective when running integration tests.
+### Main integration test
 
 This is about step 3 above: "Codex" version of `protocol/communities_messenger_token_permissions_test.go`.
 
@@ -77,104 +329,3 @@ Notice, there is one archive expected.
 The `CreateHistoryArchiveTorrentFromDB` is called directly here, in a way bypassing the torrent seeding: in normal flow `CreateHistoryArchiveTorrentFromDB` is called in `CreateAndSeedHistoryArchive` which immediately after creating the archive, calls `SeedHistoryArchiveTorrent`.  `CreateHistoryArchiveTorrentFromDB` calls `createHistoryArchiveTorrent` - which is central to the archive creating.
 
 TBC...
-
-
-### Isolated tests of the CodexClient abstraction
-
-> The text in this section is basically a copy of README from [codex-storage/go-codex-client](https://github.com/codex-storage/go-codex-client).
-
-We will be running codex client, and then use a small testing utility to check if the low level abstraction - CodexClient - correctly uploads and downloads the content.
-### Running CodexClient
-
-I often remove some logging noise, by slightly changing the build params in `build.nims`:
-
-```nim
-task codex, "build codex binary":
-  buildBinary "codex",
-    # params = "-d:chronicles_runtime_filtering -d:chronicles_log_level=TRACE"
-    params =
-      "-d:chronicles_runtime_filtering -d:chronicles_log_level=TRACE -d:chronicles_enabled_topics:restapi:TRACE,node:TRACE"
-```
-
-You see a slightly more selective `params` in the `codex` task.
-
-To run the client I use the following command:
-
-```bash
-./build/codex --data-dir=./data-1 --listen-addrs=/ip4/127.0.0.1/tcp/8081 --api-port=8001 --nat=none --disc-port=8091 --log-level=TRACE
-```
-
-### Building codex-upload and codex-download utilities
-
-Use the following command to build the `codex-upload` and `codex-download` utilities:
-
-```bash
-go build -o bin/codex-upload ./cmd/upload
-go build -o bin/codex-download ./cmd/download
-```
-### Uploading content to Codex
-
-Now, using the `codex-upload` utility, we can upload the content to Codex as follows:
-
-```bash
-~/code/local/go-codex-client
-❯ ./bin/codex-upload -file test-data.bin -host localhost -port 8001
-Uploading test-data.bin (43 bytes) to Codex at localhost:8001...
-✅ Upload successful!
-CID: zDvZRwzm8K7bcyPeBXcZzWD7AWc4VqNuseduDr3VsuYA1yXej49V
-```
-
-### Downloading content from Codex
-
-Now, having the content uploaded to Codex - let's get it back using the `codex-download` utility:
-
-```bash
-~/code/local/go-codex-client
-❯ ./bin/codex-download -cid zDvZRwzm8K7bcyPeBXcZzWD7AWc4VqNuseduDr3VsuYA1yXej49V -file output.bin -host localhost -port 8001
-Downloading CID zDvZRwzm8K7bcyPeBXcZzWD7AWc4VqNuseduDr3VsuYA1yXej49V from Codex at localhost:8001...
-✅ Download successful!
-Saved to: output.bin
-```
-
-You can easily compare that the downloaded content matches the original using:
-
-```bash
-~/code/local/go-codex-client
-❯ openssl sha256 test-data.bin
-SHA2-256(test-data.bin)= c74ce73165c288348b168baffc477b6db38af3c629b42a7725c35d99d400d992
-
-~/code/local/go-codex-client
-❯ openssl sha256 output.bin
-SHA2-256(output.bin)= c74ce73165c288348b168baffc477b6db38af3c629b42a7725c35d99d400d992
-```
-
-### Running tests
-
-There are a couple of basic tests, including one integration test.
-
-To run the unit tests:
-
-```bash
-❯ go test -v ./communities
-=== RUN   TestUpload_Success
---- PASS: TestUpload_Success (0.00s)
-=== RUN   TestDownload_Success
---- PASS: TestDownload_Success (0.00s)
-=== RUN   TestDownloadWithContext_Cancel
---- PASS: TestDownloadWithContext_Cancel (0.04s)
-PASS
-ok  	go-codex-client/communities	0.044s
-```
-
-To run the integration test, use `integration` tag and narrow the scope using `-run Integration`:
-
-```bash
-go test -v -tags=integration ./communities -run Integration -timeout 15s
-```
-
-To make sure that the test is actually run and not cached, use `count` option:
-
-```bash
-go test -v -tags=integration ./communities -run Integration -timeout 15s -count 1
-```
-
