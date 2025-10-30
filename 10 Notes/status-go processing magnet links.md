@@ -547,18 +547,18 @@ func (m *Messenger) handleRetrievedMessages(chatWithMessages map[messagingtypes.
 └─────────────────────────────────────────────────────────────────┘
                                 ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│                 MESSAGE COLLECTION                             │
-│  RetrieveAll() → messaging.RetrieveRawAll()                    │
-│       ↓                                                        │
-│  transport.RetrieveRawAll()                                    │
-│       ↓                                                        │
-│  For each filter: api.GetFilterMessages()                     │
-│       ↓                                                        │
-│  filter.Retrieve() → store.Pop()                              │
-│                                                                │
-│  Returns: map[ChatFilter][]*ReceivedMessage                   │
+│                 MESSAGE COLLECTION                              │
+│  RetrieveAll() → messaging.RetrieveRawAll()                     │
+│                       ↓                                         │
+│                  transport.RetrieveRawAll()                     │
+│                       ↓                                         │
+│                  For each filter: api.GetFilterMessages()       │
+│                       ↓                                         │
+│                  filter.Retrieve() → store.Pop()                │
+│                                                                 │
+│                  Returns: map[ChatFilter][]*ReceivedMessage     │
 └─────────────────────────────────────────────────────────────────┘
-                                ↓
+        ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │                MESSAGE PROCESSING                              │
 │  handleRetrievedMessages(messages, true, false)               │
@@ -575,6 +575,7 @@ func (m *Messenger) handleRetrievedMessages(chatWithMessages map[messagingtypes.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+And here is also a link to a diagram in excalidraw: [https://link.excalidraw.com/readonly/vSon9uiUhYJWrwXiKAsi](https://link.excalidraw.com/readonly/vSon9uiUhYJWrwXiKAsi).
 ### **6. Key Points About the Flow**
 
 1. **Asynchronous Message Queue**: Messages from network are queued and processed asynchronously

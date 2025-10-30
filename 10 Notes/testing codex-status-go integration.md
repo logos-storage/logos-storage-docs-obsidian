@@ -4,6 +4,13 @@ related-to:
 ---
 In [[Running Unit Tests for status-go]] we provide general notes on running unit tests in the status-go project. And then we have a similar note about functional tests in [[Running functional tests in status-go]].
 
+Also, to learn the history archive creation/upload and download/processing flows (recorded AI conversation with some edits), please check:
+
+- archive creation/upload: [[When are magnetlink messages sent]]
+- archive download/processing: [[status-go processing magnet links]]
+
+In that last document I am including a link to an excalidraw diagram that can be helpful - for convenience: [https://link.excalidraw.com/readonly/vSon9uiUhYJWrwXiKAsi](https://link.excalidraw.com/readonly/vSon9uiUhYJWrwXiKAsi)
+
 In this document, we focus on our Codex extension to status-go and here we focus on the related unit and integration tests.
 
 There is one existing test in status-go that has slightly more end-to-end nature. It is from the `protocol` package:
@@ -275,7 +282,32 @@ I prefer to be more selective when running integration tests.
 
 This is about step 3 above: "Codex" version of `protocol/communities_messenger_token_permissions_test.go`.
 
-The test we are particularly interested in - `TestImportDecryptedArchiveMessages` - first creates a community and sets up the corresponding permissions. Then the community owner sends a message to the community and then immediately retrieves it so that it is now recorded in the DB.
+The test we are particularly interested in is `TestImportDecryptedArchiveMessages`.
+
+This test produces lots of output - with lot's warnings and errors - so looking at the log to judge the success would be a challenge. Yet, the test passes:
+
+```bash
+❯ gotestsum --packages="./protocol" -f testname -- -run "TestMessengerCommunitiesTokenPermissionsSuite/TestImportDecryptedArchiveMessages" -count 1 -tags "gowaku_no_rln gowaku_skip_migrations"
+PASS protocol.TestMessengerCommunitiesTokenPermissionsSuite/TestImportDecryptedArchiveMessages (1.88s)
+PASS protocol.TestMessengerCommunitiesTokenPermissionsSuite (1.88s)
+PASS protocol
+
+DONE 2 tests in 1.900s
+```
+
+If you want to take a look at the logs you can use the more verbose version of the above command:
+
+```bash
+❯ gotestsum --packages="./protocol" -f standard-verbose -- -run "TestMessengerCommunitiesTokenPermissionsSuite/TestImportDecryptedArchiveMessages" -v -count 1 -tags "gowaku_no_rln gowaku_skip_migrations"
+```
+
+and you can use `tee` to redirect all the output to a file:
+
+```bash
+❯ gotestsum --packages="./protocol" -f standard-verbose -- -run "TestMessengerCommunitiesTokenPermissionsSuite/TestImportDecryptedArchiveMessages" -v -count 1 -tags "gowaku_no_rln gowaku_skip_migrations" | tee "test_1.log"
+```
+
+The test first creates a community and sets up the corresponding permissions. Then the community owner sends a message to the community and then immediately retrieves it so that it is now recorded in the DB.
 
 After that it prepares archive parameters: `startDate`, `endDate`, `partition`, and community `topics`. All those will be passed to `CreateHistoryArchiveTorrentFromDB` - our entry point to creating history archive torrent.
 
@@ -328,4 +360,121 @@ Notice, there is one archive expected.
 
 The `CreateHistoryArchiveTorrentFromDB` is called directly here, in a way bypassing the torrent seeding: in normal flow `CreateHistoryArchiveTorrentFromDB` is called in `CreateAndSeedHistoryArchive` which immediately after creating the archive, calls `SeedHistoryArchiveTorrent`.  `CreateHistoryArchiveTorrentFromDB` calls `createHistoryArchiveTorrent` - which is central to the archive creating.
 
-TBC...
+The "Codex" version of the `CreateHistoryArchiveTorrentFromDB` is `CreateHistoryArchiveCodexFromDB` which will call `createHistoryArchiveCodex` - this is where archives are created and uploaded to Codex.
+
+Another function that this test "touches" is `LoadHistoryArchiveIndexFromFile`, for which the "Codex" version is `CodexLoadHistoryArchiveIndexFromFile`.
+
+Thus, this test focuses on an important cut of the whole end-to-end flow and in our case, where we use Codex, it also indirectly tests seeding and retrieving the archives from the network.
+
+### Other places we can consider to test
+
+The integration test described above does not cover actual publishing of the generated archives over waku channel. This normally happens in `CreateAndSeedHistoryArchive`:
+
+```
+CreateAndSeedHistoryArchive
+ |- CreateHistoryArchiveTorrentFromDB
+ |- SeedHistoryArchiveTorrent
+ |- CreateHistoryArchiveCodexFromDB
+ |- publish: HistoryArchiveSeedingSignal
+```
+
+We see that we seed the index file and the archives for both torrent and Codex and when at least one publishing method succeeds, we do:
+
+```go
+m.publisher.publish(&Subscription{
+	HistoryArchivesSeedingSignal: &signal.HistoryArchivesSeedingSignal{
+		CommunityID: communityID.String(),
+		MagnetLink:  archiveTorrentCreatedSuccessfully, // true if torrent created successfully
+		IndexCid:    archiveCodexCreatedSuccessfully,   // true if codex created successfully
+	},
+})
+```
+
+This signal is subsequently received in `handleCommunitiesHistoryArchivesSubscription`, where we find:
+
+```go
+if c.IsControlNode() {
+	if sub.HistoryArchivesSeedingSignal.MagnetLink {
+		err := m.dispatchMagnetlinkMessage(sub.HistoryArchivesSeedingSignal.CommunityID)
+		if err != nil {
+			m.logger.Debug("failed to dispatch magnetlink message", zap.Error(err))
+		}
+	}
+	if sub.HistoryArchivesSeedingSignal.IndexCid {
+		err := m.dispatchIndexCidMessage(sub.HistoryArchivesSeedingSignal.CommunityID)
+		if err != nil {
+			m.logger.Debug("failed to dispatch index cid message", zap.Error(err))
+		}
+	}
+}
+```
+
+The `dispatchMagnetlinkMessage` and `dispatchIndexCidMessage` is where dispatching is happening. For Codex the MessageType used is `protobuf.ApplicationMetadataMessage_COMMUNITY_MESSAGE_ARCHIVE_INDEX_CID`.
+
+The message is sent as follows:
+
+```go
+chatID := community.MagnetlinkMessageChannelID()
+rawMessage := messagingtypes.RawMessage{
+	LocalChatID:          chatID,
+	Sender:               community.PrivateKey(),
+	Payload:              encodedMessage,
+	MessageType:          protobuf.ApplicationMetadataMessage_COMMUNITY_MESSAGE_ARCHIVE_INDEX_CID,
+	SkipGroupMessageWrap: true,
+	PubsubTopic:          community.PubsubTopic(),
+	Priority:             &messagingtypes.LowPriority,
+}
+
+_, err = m.messaging.SendPublic(context.Background(), chatID, rawMessage)
+if err != nil {
+	return err
+}
+
+err = m.communitiesManager.UpdateCommunityDescriptionIndexCidMessageClock(community.ID(), indexCidMessage.Clock)
+if err != nil {
+	return err
+}
+return m.communitiesManager.UpdateIndexCidMessageClock(community.ID(), indexCidMessage.Clock)
+```
+
+Here notice the call to `UpdateCommunityDescriptionIndexCidMessageClock`. As you can see, the clocks are also recorded in the community description. Community description is sent over waku to other community members periodically (every 5mins) or on some events. This how it is sent in `publishOrg` in `protocol/messenger_communities.go`:
+
+```go
+rawMessage := messagingtypes.RawMessage{
+	Payload: payload,
+	Sender:  org.PrivateKey(),
+	// we don't want to wrap in an encryption layer message
+	SkipEncryptionLayer: true,
+	CommunityID:         org.ID(),
+	MessageType:         protobuf.ApplicationMetadataMessage_COMMUNITY_DESCRIPTION,
+	PubsubTopic:         org.PubsubTopic(), // TODO: confirm if it should be sent in community pubsub topic
+	Priority:            &messagingtypes.HighPriority,
+}
+if org.Encrypted() {
+	members := org.GetMemberPubkeys()
+	if err != nil {
+		return err
+	}
+	rawMessage.CommunityKeyExMsgType = messagingtypes.KeyExMsgRekey
+	// This should be the one that it was used to encrypt this community
+	rawMessage.HashRatchetGroupID = org.ID()
+	rawMessage.Recipients = members
+}
+messageID, err := m.messaging.SendPublic(context.Background(), org.IDString(), rawMessage)
+```
+
+When community members receive the community description, they compare the clocks in the community description with the most recent clocks of the most recent magnet link or index Cid. IF the clocks in the community description are newer (more recent), they update the local copies, so that when a new magnet link or index Cid message arrives, they know to ignore outdated messages.
+
+To read more, check: [[History Archives and Community Description]].
+
+This naturally brought us to the reception of the magnet links/index Cid (see also [[status-go processing magnet links]] and [[status-go publishing magnet links]]).
+
+Going from Waku and layers of status-go, the accumulated messages are periodically collected using `RetrieveAll` functions, which passes the message to `handleRetrievedMessages` for processing.
+
+For each message, `dispatchToHandler` is called (in it in generated file `message_handler.go` generated with `go generate ./cmd/generae_handlers/`) where are magnet links/index Cid message are forwarded to their respective handlers: `handleCommunityMessageArchiveMagnetlinkProtobuf` and `handleCommunityMessageArchiveIndexCidProtobuf`. In the end they end up in `HandleHistoryArchiveMagnetlinkMessage` and `HandleHistoryArchiveIndexCidMessage` respectively. At the end, they trigger async processing in go routines calling `downloadAndImportHistoryArchives` and `downloadAndImportCodexHistoryArchives`. Just after the respective go routines are created, the clock are updated with `m.communitiesManager.UpdateMagnetlinkMessageClock(id, clock)` and `m.communitiesManager.UpdateIndexCidMessageClock(id, clock)`.
+
+But before even starting go routine, we check the distribution preference with `GetArchiveDistributionPreference` and the last seen index Cid `m.communitiesManager.GetLastSeenIndexCid(id)` (it will be updated after downloading the archives but before processing them in `downloadAndImportCodexHistoryArchives`) and the corresponding clock `GetIndexCidMessageClock`, to make sure we are not processing some outdated archives.
+
+We can see that the above "integration test", in case of Codex, by calling `RetrieveAll` it effectively triggers archive download from Codex, yet it does not cover the dissemination of the indexCid - the test basically assumes that the index file has been stored, thus, if we want to cover more, we need to go beyond that test.
+
+Perhaps, to cover the whole flow, it is best to build status-desktop with our status-go library and test it from there.

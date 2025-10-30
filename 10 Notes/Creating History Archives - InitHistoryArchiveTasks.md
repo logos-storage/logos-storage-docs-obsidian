@@ -6,12 +6,6 @@ related-to:
   - "[[status-go-codex integration - design notes]]"
   - "[[Creating History Archives - InitHistoryArchiveTasks]]"
 ---
-Great question! Let me trace the connection between `StartHistoryArchiveTasksInterval` and `InitHistoryArchiveTasks` to show you how the periodic archive creation system is initialized and started. 
-
-Searched codebase for "InitHistoryArchiveTasks StartHistoryArchiveTasksInterval", 13 results
-
-Perfect! Now I can show you the complete connection between `InitHistoryArchiveTasks` and `StartHistoryArchiveTasksInterval`. Let me trace through this step by step:
-
 ## **Connection Flow: `InitHistoryArchiveTasks` → `StartHistoryArchiveTasksInterval`**
 
 ### **1. Where `InitHistoryArchiveTasks` is Called** 
