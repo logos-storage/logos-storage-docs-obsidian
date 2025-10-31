@@ -161,6 +161,16 @@ go generate ./protobuf
 
 > If you run `make`, e.g. `make statusgo-library`, the correct `generate` commands for the protobuf will be run for you. So in practice, you may not need to run `go generate ./protobuf` manually yourself - but for reference, why not... let's break something ;).
 
+### Environment variables to run unit tests
+
+After Codex library (`libcodex`) has been added to the project the build system depends on it. Thus, to run the tests directly using `go test` or `gotestsum` command you need to make sure that the following environment variables are set:
+
+```bash
+export LIBS_DIR="$(realpath ./libs)"
+export CGO_CFLAGS=-I$LIBS_DIR
+export CGO_LDFLAGS="-L$LIBS_DIR -lcodex -Wl,-rpath,$LIBS_DIR"
+```
+
 ### Running unit tests for Codex abstractions
 
 We have some unit tests and a couple of integration tests.
