@@ -197,7 +197,7 @@ run_functional_tests.sh "test_accept_request_address_for_transaction and wakuV2L
 run_functional_tests.sh "test_accept_request_address_for_transaction and wakuV2LightClient_True"
 ```
 
-When the argument is provided you the `run_functional_tests.sh` will first tell you which tests will be run and let you decide to continue or not:
+When the argument is provided the `run_functional_tests.sh` will first tell you which tests will be run and let you decide to continue or not:
 
 ```bash
 Discovering tests to be run...
