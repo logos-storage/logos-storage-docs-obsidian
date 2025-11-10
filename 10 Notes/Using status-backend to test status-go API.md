@@ -115,6 +115,7 @@ Some examples:
 ```
 
 ```bash
-curl -sS http://127.0.0.1:12345/statusgo/CallRPC -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":2,"method":"wakuext_updateMessageArchiveInterval","params":[10000]}'
-{"jsonrpc":"2.0","id":1,"result":10000}
+curl -sS http://127.0.0.1:12345/statusgo/CallRPC -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":2,"method":"wakuext_updateMessageArchiveInterval","params":[60480]}'
+{"jsonrpc":"2.0","id":1,"result":604800000000000}
 ```
+Notice that value to be set is provided in seconds but the value returned in the result is in nanoseconds (to avoid potential problems with division).

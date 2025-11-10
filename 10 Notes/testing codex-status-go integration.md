@@ -9,6 +9,8 @@ Also, to learn the history archive creation/upload and download/processing flows
 - archive creation/upload: [[When are magnetlink messages sent]]
 - archive download/processing: [[status-go processing magnet links]]
 
+To grasp the concept of topics and filters - check [[Filters, Topics, Channels, and Chat IDs in status-go and waku]].
+
 In that last document I am including a link to an excalidraw diagram that can be helpful - for convenience: [https://link.excalidraw.com/readonly/vSon9uiUhYJWrwXiKAsi](https://link.excalidraw.com/readonly/vSon9uiUhYJWrwXiKAsi)
 
 In this document, we focus on our Codex extension to status-go and here we focus on the related unit and integration tests.

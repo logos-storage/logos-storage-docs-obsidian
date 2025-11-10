@@ -1,3 +1,6 @@
+> Since we created this document we gained a bit more understanding of how topics and filters work in status-go and waku: please check [[Filters, Topics, Channels, and Chat IDs in status-go and waku]].
+
+
 This is the definition of the `ChatFilter` type:
 
 ```go

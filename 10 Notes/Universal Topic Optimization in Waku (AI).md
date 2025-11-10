@@ -1,3 +1,5 @@
+> Since we created this document we gained a bit more understanding of how topics and filters work in status-go and waku: please check [[Filters, Topics, Channels, and Chat IDs in status-go and waku]].
+
 There is [a comment in the code base](https://github.com/status-im/status-go/blob/6322f22783585474803cfc8a6f0a914757d763b5/protocol/communities/community.go#L1584-L1589):
 
 ```go
