@@ -1,32 +1,234 @@
-At a higher level, Block Exchange Module is responsible for sending and receiving blocks related to the given content. Formally a block is described as a tuple consisting of the sequence of bytes and the corresponding CID. Or, using a pseudo-language: `(seq[byte], CID)`.
+# Codex Block Exchange Specification
 
-When uploading the content to the network, the following steps are taken:
+The Block Exchange (BE) is a core component of Codex and is responsible for peer-to-peer content distribution. It handles the sending and receiving of blocks across the network, enabling efficient data sharing between Codex nodes.
 
-1. The content is chunked into fixed size blocks. The default block size is `64KiB`. The last block will be padded with `0`s.
-2. For each chunk, the corresponding `CID` is created, using `(codex-block, 0xCD02)` as a [[Multicodec]] and `(sha2-256, 0x12)` as [[Mutihash]].
-3. The resulting block, `(seq[byte], CID)` becomes the input to the Block Exchange Module `putBlock` operation.
+## Overview
 
-When downloading the content from the network:
+The Codex Block Exchange defines both an internal service and a protocol through which Codex nodes can refer to, and provide data blocks to one another. Blocks are uniquely identifiable by means of an _address_, and represent fixed-length chunks of arbitrary data. 
 
-1. Given the Codex Manifest CID, the corresponding Codex Manifest is retrieved. Using manifest attributes - `datasetSize` and `blockSize`, the number of blocks - $blockCount$ is computed as $\lceil datasetSize/blockSize \rceil$.
-2. For each $blockIndex \in [0 .. blockCount]$, a $BlockAddress$ is defined as a tuple $(treeCid, blockIndex)$ where $treeCid$ is an attribute in the Codex Manifest. $BlockAddress$ is the input of the Block Exchange Module `requestBlock` operation.
+Whenever a peer $A$ wishes to obtain a block, it registers its unique address with the BE, and the BE will then be in charge of procuring it; i.e, of finding a peer that has block, if any, and then downloading it. The BE will also accept requests from peers connected to $A$ which might want blocks that $A$ has, and provide them.
 
-The `putBlock` and `requestBlock` operations defined above, define the external interface of the Block Exchange Module. The Block Exchange Module directly interacts with other modules, mainly [[Discovery Module]] and the [[Repo Store]], used for the node discovery and local storage respectively.
+**Discovery separation.** Throughout this document we assume that if $A$ wants a block $b$ with id $\text{id}(b)$, then $A$ has the means to locate and connect to peers which either:
 
-## Functional Requirements
+1. have $b$;
+2. are reasonably expected to obtain $b$ in the future.
 
-Before defining the operational model of the Block Exchange Module, which describes *how* the exchange module achieves its goals, let's the find the functional requirements that define *what* the exchange module is expected to achieve.
+In practical implementations, the BE will typically require the support of an underlying _discovery service_, e.g., the [Codex DHT](), to look up such peers, but this is beyond the scope of this document.
 
-1. Given $BlockAddress = (treeCid, blockIndex)$, retrieve the corresponding block from the network. In the operational model, we will see that the exchange module will attempt $3000$ retires, waiting $500ms$ in each iteration for the block to be delivered. Thus, from the declarative perspective, here, we can claim that exchange module should deliver the block withing $3000 \times 500ms = 1500s = 25min$, or fail otherwise.
-2. When uploading content $C$, for each block $b \in C$, store $b$ in [[Repo Store]] and (1) announce the block *presence* to the peers signaling interest in $b$, (2) deliver $b$ to the peers that earlier requested $b$. Include Merkle Proof in the delivery if $b$ is not Codex Manifest block.
+### Block Format
 
-## Operational Model
+Blocks in Codex can be of two different types:
 
-In this section we focus more how the exchange module operates to deliver on the [[#Functional Requirements]].
+* **standalone blocks** are self-contained pieces of data addressed by a content ID made from the SHA256 hash of the contents of the block;
+* **dataset blocks**, instead, are part of an ordered set (a dataset) and can be _additionally_ addressed by a `(datasetCID, index)` tuple which indexes the block within that dataset. `datasetCID`, here, represents the root of a Merkle tree computed over all the blocks in the dataset. In other words, a dataset block can be addressed both as a standalone block (by a CID computed over the contents of the block), or as an index within an ordered set identified by a Merkle root.
 
-In the image below, we provide a high level description of the exchange module operational model. A more detailed discussion follows.
+Formally, we can define a block as tuple consisting of raw data and its content identifier: `(data: seq[byte], cid: Cid)`, where standalone blocks are addressed by `cid`, and dataset blocks can be addressed either by `cid` or a `(datasetCID, index)` tuple.
 
-![[BlockExchangeProtocol.svg]]
+**Creating blocks.** Blocks in Codex have default size of 64 KiB. Blocks within a dataset must be all of the same size. If a dataset does not contain enough data to fill its last block, it MUST be padded with zeroes.
 
-> The image above has SVG format which allows a high resolution local rendering. You can also access online version at: https://link.excalidraw.com/readonly/GLtqSUDCiRe38gDb2MOX.
+**Multicodec/Multihash.** The libp2p multicodec for a block CID is `codex-block` (0xCD02), while the multihash is `sha2-256` (0x12).
 
+### Service Interface
+
+The BE service allows a peer to register block addresses with the underlying service for retrieval. It exposes two primitives for that:
+
+```python
+async def requestBlock(address: BlockAddress) -> Block:
+   pass
+
+async def cancelRequest(address: BlockAddress) -> bool:
+    pass
+```
+
+`requestBlock` registers a block for retrieval and can be awaited on, whereas `cancelRequest` cancels a previously registered request.
+
+## Dependencies
+
+In practice, the BE relies on other modules and services:
+
+- **Discovery Module**: DHT-based peer discovery for content
+- **Local Store (Repo Store)**: Persistent block storage
+- **Advertiser**: Announces block availability to the DHT
+- **Network Layer**: libp2p-based peer connections and message transport
+
+## Protocol Identifier
+
+The Block Exchange Protocol uses the following libp2p protocol identifier:
+
+```
+/codex/blockexc/1.0.0
+```
+
+## Connection Model
+
+The protocol operates over libp2p streams. When a node wants to communicate with a peer:
+
+1. The initiating node dials the peer using the protocol identifier
+2. A bidirectional stream is established
+3. Both sides can send and receive messages on this stream
+4. Messages are encoded using Protocol Buffers
+5. The stream remains open for the duration of the exchange session
+6. Peers track active connections in a peer context store
+
+The protocol handles peer lifecycle events:
+- **Peer Joined**: When a peer connects, it is added to the active peer set
+- **Peer Departed**: When a peer disconnects gracefully, its context is cleaned up
+- **Peer Dropped**: When a peer connection fails, it is removed from the active set
+
+## Message Format
+
+All messages exchanged between peers use Protocol Buffers encoding.
+
+### Message Structure
+
+```protobuf
+message Message {
+  Wantlist wantlist = 1;
+  repeated BlockDelivery payload = 3;
+  repeated BlockPresence blockPresences = 4;
+  int32 pendingBytes = 5;
+  AccountMessage account = 6;
+  StateChannelUpdate payment = 7;
+}
+```
+
+**Field Descriptions:**
+
+- `wantlist`: Requests for blocks (presence checks or full block requests)
+- `payload`: Block deliveries being sent to the peer
+- `blockPresences`: Block presence information (have/don't have)
+- `pendingBytes`: Number of bytes currently pending delivery to this peer
+- `account`: Ethereum account information for receiving payments
+- `payment`: Nitro state channel update for micropayments
+
+### Block Addressing
+
+Codex uses a block addressing scheme that supports both standalone content-addressed blocks and blocks within Merkle tree structures.
+
+```protobuf
+message BlockAddress {
+  bool leaf = 1;
+  bytes treeCid = 2;    // Present when leaf = true
+  uint64 index = 3;     // Present when leaf = true
+  bytes cid = 4;        // Present when leaf = false
+}
+```
+
+**Addressing Modes:**
+
+- **Standalone Block** (`leaf = false`): Direct CID reference to a standalone content block
+- **Dataset Block** (`leaf = true`): Reference to a block within a an ordered set, identified by a Merkle tree root and an index. The Merkle root may refer to either a regular dataset, or a dataset that has underwent erasure-coding
+
+### WantList
+
+The WantList allows a peer to request blocks or check for block availability.
+
+```protobuf
+message Wantlist {
+  enum WantType {
+    wantBlock = 0;
+    wantHave = 1;
+  }
+
+  message Entry {
+    BlockAddress address = 1;
+    int32 priority = 2;
+    bool cancel = 3;
+    WantType wantType = 4;
+    bool sendDontHave = 5;
+  }
+
+  repeated Entry entries = 1;
+  bool full = 2;
+}
+```
+
+**Field Descriptions:**
+
+- **Entry.address**: The block being requested
+- **Entry.priority**: Request priority (currently always 0)
+- **Entry.cancel**: If true, cancels a previous want for this block
+- **Entry.wantType**:
+  - `wantHave (1)`: Only check if peer has the block
+  - `wantBlock (0)`: Request full block data
+- **Entry.sendDontHave**: If true, peer should respond even if it doesn't have the block
+- **full**: If true, this WantList replaces all previous wants; if false, it's a delta update
+
+**Delta WantList Updates:**
+
+The protocol supports efficient delta updates where only changes to the WantList are transmitted:
+- New blocks are added to the peer's want list
+- Cancelled blocks are removed from the peer's want list
+- Delta updates use `full = false`
+- Full replacements use `full = true`
+
+### Block Delivery
+
+Block deliveries contain the actual block data with Merkle proofs for dataset blocks.
+
+```protobuf
+message BlockDelivery {
+  bytes cid = 1;
+  bytes data = 2;
+  BlockAddress address = 3;
+  bytes proof = 4;  // Present only when address.leaf = true
+}
+```
+
+**Field Descriptions:**
+
+- `cid`: Content identifier of the block
+- `data`: Raw block data (up to 100 MiB)
+- `address`: The address that was requested
+- `proof`: Merkle proof (CodexProof) verifying block correctness (required for dataset blocks)
+
+**Merkle Proof Verification:**
+
+When delivering dataset blocks (`address.leaf = true`):
+- The delivery must include a Merkle proof (CodexProof)
+- The proof verifies that the block at the given index is correctly part of the Merkle tree identified by the tree CID
+- This applies to all datasets, irrespective of whether they have been erasure-coded or not
+- Recipients must verify the proof before accepting the block
+- Invalid proofs result in block rejection
+
+### Block Presence
+
+Block presence messages indicate whether a peer has specific blocks.
+
+```protobuf
+enum BlockPresenceType {
+  presenceHave = 0;
+  presenceDontHave = 1;
+}
+
+message BlockPresence {
+  BlockAddress address = 1;
+  BlockPresenceType type = 2;
+  bytes price = 3;
+}
+```
+
+**Field Descriptions:**
+
+- `address`: The block address being referenced
+- `type`: Whether the peer has the block or not
+- `price`: Price (UInt256 format)
+
+### Payment Messages
+
+Payment-related messages for micropayments using Nitro state channels.
+
+```protobuf
+message AccountMessage {
+  bytes address = 1;  // Ethereum address to which payments should be made
+}
+
+message StateChannelUpdate {
+  bytes update = 1;   // Signed Nitro state, serialized as JSON
+}
+```
+
+**Field Descriptions:**
+
+- `AccountMessage.address`: Ethereum address for receiving payments
+- `StateChannelUpdate.update`: Nitro state channel update containing payment information
