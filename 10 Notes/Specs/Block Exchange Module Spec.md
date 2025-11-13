@@ -1,43 +1,51 @@
-# Codex Block Exchange Module Specification
+# Codex Block Exchange Specification
 
-## Introduction
-
-The Block Exchange Module is a core component of Codex responsible for peer-to-peer content distribution. It handles the sending and receiving of blocks across the network, enabling efficient data sharing between Codex nodes.
+The Block Exchange (BE) is a core component of Codex and is responsible for peer-to-peer content distribution. It handles the sending and receiving of blocks across the network, enabling efficient data sharing between Codex nodes.
 
 ## Overview
 
-The Codex Block Exchange Protocol is a libp2p-based protocol for exchanging content blocks between Codex nodes.
+The Codex Block Exchange defines both an internal service and a protocol through which Codex nodes can refer to, and provide data blocks to one another. Blocks are uniquely identifiable by means of an _address_, and represent fixed-length chunks of arbitrary data. 
 
-The protocol enables efficient peer-to-peer content distribution by:
-- Advertising block availability to interested peers
-- Requesting blocks from peers who have them
-- Delivering blocks with Merkle proofs for tree-structured data (both erasure-coded and regular datasets)
+Whenver a peer $A$ wishes to obtain a block, it registers its unique address with the BE, and the BE will then be in charge of procuring it; i.e, of finding a peers that has block, if any, and then downloading it. The BE will also accept requests from peers connected to $A$ which might want blocks that $A$ have, and provide them.
+
+**Discovery separation.** Throughout this document we assume that if $A$ wants a block $b$ with id $\text{id}(b)$, then $A$ has the means to locate and connect to peers which either:
+
+1. have $b$;
+2. are reasonably expected to obtain $b$ in the future.
+
+In practical implementations, the BE will typically require the support of an underlying _discovery service_, e.g., the [Codex DHT](), to look up such peers, but this is beyond the scope of this document.
 
 ### Block Format
 
-In Codex, a block is formally defined as a tuple consisting of raw data and its content identifier: `(data: seq[byte], cid: Cid)`.
+Blocks in Codex can be of two different types:
 
-**Block Creation:**
-- Content is chunked into fixed-size blocks (default: 64 KiB)
-- The last block is padded with zeros if necessary
-- Each block's CID uses:
-  - Multicodec: `codex-block` (0xCD02)
-  - Multihash: `sha2-256` (0x12)
+* **standalone blocks** are self-contained pieces of data addressed by a content ID made from the SHA256 hash of the contents of the block;
+* **dataset blocks**, instead, are part of an ordered set (a dataset) and can be _additionally_ addressed by a `(datasetCID, index)` tuple which indexes the block within that dataset. `datasetCID`, here, represents the root of a Merkle tree computed over all the blocks in the dataset. In other words, a dataset block can be addressed both as a standalone block (by a CID computed over the contents of the block), or as an index within an ordered set identified by a Merkle root.
 
-**Block Addressing:**
-Blocks can be addressed in two ways:
-- **Standalone blocks**: Direct CID reference
-- **Tree blocks**: Reference by `(treeCid, blockIndex)` for blocks within Merkle tree structures (both regular files and erasure-coded datasets)
+Formally, we can defined a block as tuple consisting of raw data and its content identifier: `(data: seq[byte], cid: Cid)`, where standalone blocks are addressed by `cid`, and dataset blocks can be addressed either by `cid` or a `(datasetCID, index)` tuple.
 
-### Module Context
+**Creating blocks.** Blocks in Codex have default size of 64 KiB. Blocks within a dataset must be all of the same size. If a dataset does not contain enough data to fill its last block, it MUST be padded with zeroes.
 
-The Block Exchange Protocol is the wire protocol used by Codex's Block Exchange Module. The module provides the following public interface:
+**Multicodec/Multihash.** The libp2p multicodec for a block CID is `codex-block` (0xCD02), while the multihash is `sha2-256` (0x12).
 
-- `requestBlock(address: BlockAddress): Future[?!Block]` - Request a single block by address
-- `requestBlock(cid: Cid): Future[?!Block]` - Request a single block by CID
-- `requestBlocks(addresses: seq[BlockAddress]): SafeAsyncIter[Block]` - Request multiple blocks as an async iterator
+### Service Interface
 
-The module integrates with:
+The BE service allows a peer to register block addresses with the underlying service for retrieval. It exposes a two primitives for that:
+
+```python
+async def requestBlock(address: BlockAddress) -> Block:
+   pass
+
+async def cancelRequest(address: BlockAddress) -> bool:
+    pass
+```
+
+`requestBlock` registers a block for retrieval and can be awaited on, whereas `cancelRequest` cancels a previously registered request.
+
+## Dependencies
+
+In practice, the BE relies on other modules and services:
+
 - **Discovery Module**: DHT-based peer discovery for content
 - **Local Store (Repo Store)**: Persistent block storage
 - **Advertiser**: Announces block availability to the DHT
