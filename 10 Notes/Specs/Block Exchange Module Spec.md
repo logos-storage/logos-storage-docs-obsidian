@@ -6,7 +6,7 @@ The Block Exchange (BE) is a core component of Codex and is responsible for peer
 
 The Codex Block Exchange defines both an internal service and a protocol through which Codex nodes can refer to, and provide data blocks to one another. Blocks are uniquely identifiable by means of an _address_, and represent fixed-length chunks of arbitrary data. 
 
-Whenver a peer $A$ wishes to obtain a block, it registers its unique address with the BE, and the BE will then be in charge of procuring it; i.e, of finding a peers that has block, if any, and then downloading it. The BE will also accept requests from peers connected to $A$ which might want blocks that $A$ have, and provide them.
+Whenever a peer $A$ wishes to obtain a block, it registers its unique address with the BE, and the BE will then be in charge of procuring it; i.e, of finding a peer that has block, if any, and then downloading it. The BE will also accept requests from peers connected to $A$ which might want blocks that $A$ has, and provide them.
 
 **Discovery separation.** Throughout this document we assume that if $A$ wants a block $b$ with id $\text{id}(b)$, then $A$ has the means to locate and connect to peers which either:
 
@@ -22,7 +22,7 @@ Blocks in Codex can be of two different types:
 * **standalone blocks** are self-contained pieces of data addressed by a content ID made from the SHA256 hash of the contents of the block;
 * **dataset blocks**, instead, are part of an ordered set (a dataset) and can be _additionally_ addressed by a `(datasetCID, index)` tuple which indexes the block within that dataset. `datasetCID`, here, represents the root of a Merkle tree computed over all the blocks in the dataset. In other words, a dataset block can be addressed both as a standalone block (by a CID computed over the contents of the block), or as an index within an ordered set identified by a Merkle root.
 
-Formally, we can defined a block as tuple consisting of raw data and its content identifier: `(data: seq[byte], cid: Cid)`, where standalone blocks are addressed by `cid`, and dataset blocks can be addressed either by `cid` or a `(datasetCID, index)` tuple.
+Formally, we can define a block as tuple consisting of raw data and its content identifier: `(data: seq[byte], cid: Cid)`, where standalone blocks are addressed by `cid`, and dataset blocks can be addressed either by `cid` or a `(datasetCID, index)` tuple.
 
 **Creating blocks.** Blocks in Codex have default size of 64 KiB. Blocks within a dataset must be all of the same size. If a dataset does not contain enough data to fill its last block, it MUST be padded with zeroes.
 
@@ -30,7 +30,7 @@ Formally, we can defined a block as tuple consisting of raw data and its content
 
 ### Service Interface
 
-The BE service allows a peer to register block addresses with the underlying service for retrieval. It exposes a two primitives for that:
+The BE service allows a peer to register block addresses with the underlying service for retrieval. It exposes two primitives for that:
 
 ```python
 async def requestBlock(address: BlockAddress) -> Block:
@@ -103,7 +103,7 @@ message Message {
 
 ### Block Addressing
 
-Codex uses a block addressing scheme that supports both simple content-addressed blocks and blocks within Merkle tree structures.
+Codex uses a block addressing scheme that supports both standalone content-addressed blocks and blocks within Merkle tree structures.
 
 ```protobuf
 message BlockAddress {
@@ -116,8 +116,8 @@ message BlockAddress {
 
 **Addressing Modes:**
 
-- **Simple Block** (`leaf = false`): Direct CID reference to a standalone content block
-- **Tree Block** (`leaf = true`): Reference to a block within a Merkle tree by tree CID and index. The tree may represent either an erasure-coded dataset or a regular uploaded file organized in a tree structure
+- **Standalone Block** (`leaf = false`): Direct CID reference to a standalone content block
+- **Dataset Block** (`leaf = true`): Reference to a block within a an ordered set, identified by a Merkle tree root and an index. The Merkle root may refer to either a regular dataset, or a dataset that has underwent erasure-coding
 
 ### WantList
 
@@ -164,7 +164,7 @@ The protocol supports efficient delta updates where only changes to the WantList
 
 ### Block Delivery
 
-Block deliveries contain the actual block data with Merkle proofs for tree blocks.
+Block deliveries contain the actual block data with Merkle proofs for dataset blocks.
 
 ```protobuf
 message BlockDelivery {
@@ -180,14 +180,14 @@ message BlockDelivery {
 - `cid`: Content identifier of the block
 - `data`: Raw block data (up to 100 MiB)
 - `address`: The address that was requested
-- `proof`: Merkle proof (CodexProof) verifying block correctness (required for tree blocks)
+- `proof`: Merkle proof (CodexProof) verifying block correctness (required for dataset blocks)
 
 **Merkle Proof Verification:**
 
-When delivering tree blocks (`address.leaf = true`):
+When delivering dataset blocks (`address.leaf = true`):
 - The delivery must include a Merkle proof (CodexProof)
 - The proof verifies that the block at the given index is correctly part of the Merkle tree identified by the tree CID
-- This applies to all tree-structured data, whether erasure-coded or not
+- This applies to all datasets, irrespective of whether they have been erasure-coded or not
 - Recipients must verify the proof before accepting the block
 - Invalid proofs result in block rejection
 
