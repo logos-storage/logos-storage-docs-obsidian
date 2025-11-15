@@ -1,4 +1,22 @@
+---
+related-to:
+  - "[[Running Unit Tests for status-go]]"
+  - "[[Running functional tests in status-go]]"
+  - "[[testing codex-status-go integration]]"
+---
 Here are some basic steps to follow:
+
+Build status-backend:
+
+```bash
+make status-backend
+```
+
+Start status-backend (I am using port `45453` for all examples below):
+
+```bash
+./build/bin/status-backend -address localhost:45453
+```
 
 ### Step 1: Initialize the application
 
@@ -93,7 +111,7 @@ I initially thought this is necessary - but it turns out that logging in is suff
 ```bash
 curl -sS http://127.0.0.1:45453/statusgo/CallRPC \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"wakuext_startMessenger","params":[]}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"wakuext_startMessenger","params":[]}' | jq
 ```
 ### Step 4: Now you can call your method!
 
@@ -119,3 +137,55 @@ curl -sS http://127.0.0.1:12345/statusgo/CallRPC -H 'Content-Type: application/j
 {"jsonrpc":"2.0","id":1,"result":604800000000000}
 ```
 Notice that value to be set is provided in seconds but the value returned in the result is in nanoseconds (to avoid potential problems with division).
+
+### Enabling History Archives
+
+You use `EnableCodexCommunityHistoryArchiveProtocol` method to enable history archives for Codex. The method also accepts optional overrides to the default codex node config.
+#### without overrides
+
+```bash
+curl -sS http://127.0.0.1:45453/statusgo/CallRPC \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"wakuext_enableCodexCommunityHistoryArchiveProtocol","params":[{}]}'
+
+# returns
+{"jsonrpc":"2.0","id":1,"result":null}
+```
+#### with overrides (example DiscoveryPort + one bootstrap SPR)
+
+```bash
+curl -sS http://127.0.0.1:45453/statusgo/CallRPC \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "jsonrpc":"2.0",
+        "id":1,
+        "method":"wakuext_enableCodexCommunityHistoryArchiveProtocol",
+        "params":[
+          {
+            "CodexNodeConfig.DiscoveryPort":"8091",
+            "CodexNodeConfig.BootstrapNodes":"[\"spr:CiUIAhIhAjOc4w87PAfj0XGMnqtYSgO8rwfPOxF7d8Y4-BXGVUJTEgIDARpJCicAJQgCEiECM5zjDzs8B-PRcYyeq1hKA7yvB887EXt3xjj4FcZVQlMQkfncyAYaCwoJBH8AAAGRAh-bGgsKCQSsEgAGkQIfmypGMEQCID4B7M6G5bEPQ_D_Z7YdPG6LHpXq3ghY2gkXtBxTExDeAiAFSOjwAem1PmbAIZlOq2hvT_LGQMwiEOEaVaoIJ1g-FQ\"]"
+          }
+        ]
+      }'
+
+# returns
+{"jsonrpc":"2.0","id":1,"result":null}
+```
+
+To stop:
+
+```bash
+curl -sS http://127.0.0.1:45453/statusgo/CallRPC   -H 'Content-Type: application/json'   -d '{"jsonrpc":"2.0","id":1,"method":"wakuext_disableCommunityHistoryArchiveProtocol","params":[]}'
+
+# returns
+{"jsonrpc":"2.0","id":1,"result":null}
+```
+
+
+And to verify the current node configuration:
+
+```bash
+curl -sS http://127.0.0.1:45453/statusgo/GetNodeConfig \
+     -H 'Content-Type: application/json' \
+     -d '{}' | jq
+```

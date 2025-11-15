@@ -575,4 +575,4 @@ DONE 2 tests in 1.453s
 DONE 3 runs, 6 tests, 4 failures in 27.876s
 ```
 
-Thus, being able to run all the tests successfully a number of time, we should be allowed to conclude that our setup is correct.
+Thus, being able to run all the tests successfully a number of times, we should be allowed to conclude that our setup is correct.
