@@ -7,6 +7,8 @@ related-to:
   - "[[Creating History Archives - InitHistoryArchiveTasks]]"
   - "[[testing codex-status-go integration]]"
 ---
+The notes in this document aim at recording our path towards the Codex integration with status-go. It is thus good to learn the dilemmas we had and some initial assumptions. The reference is the spec document and the code. 
+
 ## Codex for History Archives
 
 As indicated in the [[Team-NLBR Solution Proposal]], the central entry point to the history management is [InitHistoryArchiveTasks](https://github.com/status-im/status-go/blob/6322f22783585474803cfc8a6f0a914757d763b5/protocol/messenger_communities.go#L3783). `InitHistoryArchiveTasks` is called from **two main places**:
@@ -164,6 +166,8 @@ message CodexWakuMessageArchiveIndex {
 ```
 
 #### Appending the index file
+
+> The final implementation proposal does not use files directly and delegates persistence fully to Codex. We also do not call Codex via its Rest API, but instead we use the Codex library (libcodex).
 
 In a more production version we will not operate on the local file system, yet, here, for simplicity, we will be using a physical index file and a separate file for each archive. For this reason, in the initial implementation, a community owner will not query Codex for the current index file. For this purpose, we could use `http://localhost:8001/api/codex/v1/data/${CID}` API, which returns `404` when the file does not exist in the local store:
 

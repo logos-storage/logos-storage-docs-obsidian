@@ -4,10 +4,16 @@ related-to:
   - "[[Running Unit Tests for status-go]]"
   - "[[Running functional tests in status-go]]"
 ---
-Here are two commands you should use before pushing:
+The easiest way:
 
 ```bash
-golangci-lint run --build-tags=gowaku_no_rln
+make lint
+```
+
+And the detailed manual commands:
+
+```bash
+golangci-lint --build-tags 'gowaku_no_rln lint' run ./...
 ```
 
 and:

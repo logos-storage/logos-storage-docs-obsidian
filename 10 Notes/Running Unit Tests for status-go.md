@@ -214,61 +214,48 @@ Now, the libs. Static lib:
 
 ```bash
 make statusgo-library
-which: no go-generate-fast in (...)
-Generated handlers in ../../protocol/messenger_handlers.go for Type enum.
-Generated endpoints file: ../endpoints.go
-## cmd/library/README.md explains the magic incantation behind this
-mkdir -p build/bin/statusgo-lib
-go run cmd/library/*.go > build/bin/statusgo-lib/main.go
+# ...
 Building static library...
-go build \
-	-tags 'gowaku_no_rln' \
-	-ldflags="" \
-	-buildmode=c-archive \
-	-o build/bin/libstatus.a \
-	./build/bin/statusgo-lib
-Static library built:
--rw-r--r-- 1 mc2 mc2 247898154 Sep 17 01:24 build/bin/libstatus.a
--rw-r--r-- 1 mc2 mc2      8290 Sep 17 01:24 build/bin/libstatus.h
+CGO_ENABLED=1 CGO_CFLAGS="-I/home/mc2/code/status-im/status-go/libs -I/home/mc2/code/status-im/nim-sds/library -I//include -I//include/darwin -I/home/mc2/code/status-im/nim-sds/library -I/home/mc2/code/status-im/status-go/libs" CGO_LDFLAGS="-Wl,-rpath,/home/mc2/code/status-im/status-go/libs -L/home/mc2/code/status-im/status-go/libs -lcodex -Wl,-rpath,/home/mc2/code/status-im/status-go/libs -L/home/mc2/code/status-im/nim-sds/build -lsds -L/home/mc2/code/status-im/nim-sds/build -lsds -L/home/mc2/code/status-im/status-go/libs -lcodex" LD_LIBRARY_PATH=/home/mc2/code/status-im/status-go/libs:/home/mc2/code/status-im/nim-sds/build:$LD_LIBRARY_PATH go build \
+        -tags 'gowaku_no_rln' \
+        -ldflags="" \
+        -buildmode=c-archive \
+        -o build/bin/libstatus.a \
+        "build/bin/statusgo-lib/main.go"
+Static library built: build/bin/libstatus.a
 ```
 
 and shared lib:
 
 ```bash
 make statusgo-shared-library
-which: no go-generate-fast in (...)
-Generated handlers in ../../protocol/messenger_handlers.go for Type enum.
-Generated endpoints file: ../endpoints.go
-## cmd/library/README.md explains the magic incantation behind this
-mkdir -p build/bin/statusgo-lib
-go run cmd/library/*.go > build/bin/statusgo-lib/main.go
+# ...
 Building shared library...
 Tags: gowaku_no_rln
-CGO_LDFLAGS="-Wl,-soname,libstatus.so.0" go build \
-	-tags 'gowaku_no_rln' \
-	-ldflags="" \
-	-buildmode=c-shared \
-	-o build/bin/libstatus.so \
-	./build/bin/statusgo-lib
+CGO_LDFLAGS="-L/home/mc2/code/status-im/status-go/libs -lcodex -Wl,-rpath,/home/mc2/code/status-im/status-go/libs -L/home/mc2/code/status-im/nim-sds/build -lsds -L/home/mc2/code/status-im/nim-sds/build -lsds -L/home/mc2/code/status-im/status-go/libs -lcodex" CGO_CFLAGS="-I/home/mc2/code/status-im/status-go/libs -I/home/mc2/code/status-im/nim-sds/library -I//include -I//include/darwin -I/home/mc2/code/status-im/nim-sds/library -I/home/mc2/code/status-im/status-go/libs" \
+        go build \
+        -tags 'gowaku_no_rln' \
+        -ldflags="" \
+        -buildmode=c-shared \
+        -o build/bin/libstatus.so \
+        ./build/bin/statusgo-lib
 cd build/bin && \
 ls -lah . && \
 mv ./libstatus.so ./libstatus.so.0 && \
 ln -s ./libstatus.so.0 ./libstatus.so
-total 578M
-drwxr-xr-x 1 mc2 mc2  190 Sep 17 01:39 .
-drwxr-xr-x 1 mc2 mc2   10 Sep 10 05:15 ..
--rwxr-xr-x 1 mc2 mc2  44M Sep 10 05:15 generate-db
--rw-r--r-- 1 mc2 mc2 237M Sep 17 01:24 libstatus.a
--rw-r--r-- 1 mc2 mc2 8.1K Sep 17 01:39 libstatus.h
--rw-r--r-- 1 mc2 mc2 107M Sep 17 01:39 libstatus.so
--rwxr-xr-x 1 mc2 mc2  92M Sep 10 05:15 push-notification-server
--rwxr-xr-x 1 mc2 mc2 100M Sep 17 01:19 status-backend
-drwxr-xr-x 1 mc2 mc2   14 Sep 10 05:08 statusgo-lib
+total 495M
+drwxr-xr-x 1 mc2 mc2  120 Dec 12 18:50 .
+drwxr-xr-x 1 mc2 mc2    6 Dec 12 18:48 ..
+-rw-r--r-- 1 mc2 mc2 261M Dec 12 18:49 libstatus.a
+-rw-r--r-- 1 mc2 mc2 7.4K Dec 12 18:50 libstatus.h
+-rw-r--r-- 1 mc2 mc2 122M Dec 12 18:50 libstatus.so
+-rwxr-xr-x 1 mc2 mc2 113M Dec 12 18:48 status-backend
+drwxr-xr-x 1 mc2 mc2   14 Dec 12 18:48 statusgo-lib
 Shared library built:
--rw-r--r-- 1 mc2 mc2 247898154 Sep 17 01:24 build/bin/libstatus.a
--rw-r--r-- 1 mc2 mc2      8290 Sep 17 01:39 build/bin/libstatus.h
-lrwxrwxrwx 1 mc2 mc2        16 Sep 17 01:39 build/bin/libstatus.so -> ./libstatus.so.0
--rw-r--r-- 1 mc2 mc2 111911080 Sep 17 01:39 build/bin/libstatus.so.0
+-rw-r--r-- 1 mc2 mc2 272836554 Dec 12 18:49 build/bin/libstatus.a
+-rw-r--r-- 1 mc2 mc2      7482 Dec 12 18:50 build/bin/libstatus.h
+lrwxrwxrwx 1 mc2 mc2        16 Dec 12 18:50 build/bin/libstatus.so -> ./libstatus.so.0
+-rw-r--r-- 1 mc2 mc2 127116728 Dec 12 18:50 build/bin/libstatus.so.0
 ```
 
 ### Running unit test
@@ -279,7 +266,7 @@ The obvious
 make test
 ```
 
-a number of tests will most certainly. To understand the root cause, let's investigate a bit.
+It runs all the developer tests, except for `protocol` tests currently.
 
 `make test` uses `_assets/scripts/run_unit_tests.sh` under the hood, where we find the following fragment:
 

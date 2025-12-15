@@ -7,41 +7,29 @@ In [[Running Unit Tests for status-go]] we provide general notes on running unit
 Also, to learn the history archive creation/upload and download/processing flows (recorded AI conversation with some edits), please check:
 
 - archive creation/upload: [[When are magnetlink messages sent]]
-- archive download/processing: [[status-go processing magnet links]]
+- archive download/processing: [[status-go processing magnet links]]. In this document I am including a link to an excalidraw diagram that can be helpful - for convenience: [https://link.excalidraw.com/readonly/vSon9uiUhYJWrwXiKAsi](https://link.excalidraw.com/readonly/vSon9uiUhYJWrwXiKAsi)
 
 To grasp the concept of topics and filters - check [[Filters, Topics, Channels, and Chat IDs in status-go and waku]].
 
-In that last document I am including a link to an excalidraw diagram that can be helpful - for convenience: [https://link.excalidraw.com/readonly/vSon9uiUhYJWrwXiKAsi](https://link.excalidraw.com/readonly/vSon9uiUhYJWrwXiKAsi)
-
 In this document, we focus on our Codex extension to status-go and here we focus on the related unit and integration tests.
 
-There is one existing test in status-go that has slightly more end-to-end nature. It is from the `protocol` package:
+> Notice that this is still a proof-of-concept and may deserve a bit more exhaustive testing if it is decided to use it in the production.
 
-```
-protocol/communities_messenger_token_permissions_test.go
-```
+The most important tests we added:
 
-We will be providing an updated version of this test **AFTER** testing lower levels of the stack.
+1. [CodexClient](https://github.com/status-im/status-go/blob/feat/status-go-codex-integration/protocol/communities/codex_client.go) - the proxy to the code library `libcodex`:
+	- [protocol/communities/codex_client_test.go](https://github.com/status-im/status-go/blob/feat/status-go-codex-integration/protocol/communities/codex_client_test.go)
+2. [CodexIndexDownloader](https://github.com/status-im/status-go/blob/feat/status-go-codex-integration/protocol/communities/codex_index_downloader.go):
+	- [protocol/communities/codex_index_downloader_test.go](https://github.com/status-im/status-go/blob/feat/status-go-codex-integration/protocol/communities/codex_index_downloader_test.go)
+3. [CodexArchiveDownloader](https://github.com/status-im/status-go/blob/feat/status-go-codex-integration/protocol/communities/codex_archive_downloader.go):
+	- [protocol/communities/codex_archive_downloader_test.go](https://github.com/status-im/status-go/blob/feat/status-go-codex-integration/protocol/communities/codex_archive_downloader_test.go)
+4. More end-2-end developer tests in [protocol/communities_messenger_token_permissions_test.go](https://github.com/status-im/status-go/blob/feat/status-go-codex-integration/protocol/communities_messenger_token_permissions_test.go):
+	- [TestUploadDownloadCodexHistoryArchives_withSharedCodexClient](https://github.com/status-im/status-go/blob/377d5c0df5e80e6543d2de816fbb39e684216b73/protocol/communities_messenger_token_permissions_test.go#L2386)
+	- [TestUploadDownloadCodexHistoryArchives](https://github.com/status-im/status-go/blob/377d5c0df5e80e6543d2de816fbb39e684216b73/protocol/communities_messenger_token_permissions_test.go#L2871)
+5. Functional tests in [tests-functional/tests/test_wakuext_community_archives.py](https://github.com/status-im/status-go/blob/feat/status-go-codex-integration/tests-functional/tests/test_wakuext_community_archives.py)
 
-Thus, the plan is as follows:
-
-1. More isolated tests of the CodexClient abstraction. There is a separate small utility project, where CodexClient can be exercised against the Codex client. I thought it may be easier this way to test the integration with the Codex library. The project repo url is: [codex-storage/go-codex-client](https://github.com/codex-storage/go-codex-client). Most of the tests from this project will be ported to the working branch where the main integration work takes place: `status-go-codex-integraion` in the [status-im/status-go](https://github.com/status-im/status-go) repo.
-2. Tests of `protocol/communities/codex_index_downloader.go` and `protocol/communities/codex_archive_downloader.go`.
-3. The "Codex" version of the above mentioned "integration" test.
-
-After that we should be ready for the cluster testing. If needed, we can also try to run status-desktop locally.
-
-So in this document we first document running unit and integration tests for the three major abstractions we introduced to status-go:
-
-- CodexClient
-- CodexIndexDownloader
-- CodexArchiveDownloader
-
-They are comprehensively tested in the [codex-storage/go-codex-client](https://github.com/codex-storage/go-codex-client) repo, but then they are integrated into the status-go. It is easy to figure out how to run the corresponding tests by just adjusting the commands in the above mentioned [codex-storage/go-codex-client](https://github.com/codex-storage/go-codex-client) repo, but for completeness, we present the updated content below.
-
+In the remaining part of the document we give some handy information on how we can run those tests.
 ### Regenerating artifacts
-
-In [codex-storage/go-codex-client](https://github.com/codex-storage/go-codex-client) we include all the generated artifacts. In status-go, they are not included in the version control. Thus, what is optional in [codex-storage/go-codex-client](https://github.com/codex-storage/go-codex-client), here is obligatory to do before you will be able to run the tests.
 
 There are two artifacts that need to be updated:
 
@@ -173,43 +161,71 @@ export CGO_CFLAGS=-I$LIBS_DIR
 export CGO_LDFLAGS="-L$LIBS_DIR -lcodex -Wl,-rpath,$LIBS_DIR"
 ```
 
-### Running unit tests for Codex abstractions
-
-We have some unit tests and a couple of integration tests.
-
-In this section we focus on the unit tests. The integration tests are covered in the
-next section.
-
-To run all unit tests:
+Additionally, since status-go added the SDS library, there are even more environment variables that need to be setup. We have a handy script to do just that:
 
 ```bash
-❯ go test -v ./protocol/communities -count 1
+#!/usr/bin/env bash
+# Source this file to set up environment variables for running tests with gotestsum
+# Usage: source ./set-test-env.sh
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+export LIBS_DIR="$(realpath "$SCRIPT_DIR/libs")"
+export NIM_SDS_LIB_DIR="$(realpath "$SCRIPT_DIR/../nim-sds/build")"
+export NIM_SDS_INC_DIR="$(realpath "$SCRIPT_DIR/../nim-sds/library")"
+export CGO_CFLAGS="-I$LIBS_DIR -I$NIM_SDS_INC_DIR"
+export CGO_LDFLAGS="-L$LIBS_DIR -lcodex -Wl,-rpath,$LIBS_DIR -L$NIM_SDS_LIB_DIR -lsds"
+
+# Detect OS and set library path accordingly
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    export DYLD_LIBRARY_PATH="$LIBS_DIR:$NIM_SDS_LIB_DIR:$DYLD_LIBRARY_PATH"
+    echo "Environment configured for macOS"
+else
+    export LD_LIBRARY_PATH="$LIBS_DIR:$NIM_SDS_LIB_DIR:$LD_LIBRARY_PATH"
+    echo "Environment configured for Linux"
+fi
+
+echo "Test environment variables set:"
+echo "  LIBS_DIR=$LIBS_DIR"
+echo "  NIM_SDS_LIB_DIR=$NIM_SDS_LIB_DIR"
+echo "  NIM_SDS_INC_DIR=$NIM_SDS_INC_DIR"
+echo ""
+echo "You can now run tests with gotestsum, for example:"
+echo '  gotestsum --packages="./protocol/communities" -f testname -- -count 1 -tags "gowaku_no_rln gowaku_skip_migrations" -run CodexArchiveManagerSuite'
 ```
 
-To be more selective, e.g. in order to run all the tests from 
-`CodexArchiveDownloaderSuite`, run:
+Thus, just run:
 
 ```bash
-go test -v ./protocol/communities -run CodexArchiveDownloader -count 1
+source ./set-test-env.sh
 ```
 
-or for an individual test from that suite:
+in the top level directory and you should be good to go.
+### Running developer-facing tests for Codex abstractions
+
+**TL;DR**
+
+Install `gotestsum`:  `go install gotest.tools/gotestsum@v1.13.0`
+
+Then to run `./protocol/community` tests:
 
 ```bash
-go test -v ./protocol/communities -run TestCodexArchiveDownloaderSuite/TestCancellationDuringPolling -count 1
+gotestsum --packages="./protocol/communities" -f testname --rerun-fails -- -count 1 -timeout "5m" -tags "gowaku_no_rln gowaku_skip_migrations"
 ```
 
-You can also use `gotestsum` to run the tests (you may need to install it first, e.g. `go install gotest.tools/gotestsum@v1.13.0`):
+To run all `./protocol` tests:
 
 ```bash
-gotestsum --packages="./protocol/communities" -f testname --rerun-fails -- -count 1
+gotestsum --packages="./protocol" -f testname --rerun-fails -- -count 1 -timeout "45m" -tags "gowaku_no_rln gowaku_skip_migrations"
 ```
 
-For a more verbose output including logs use `-f standard-verbose`, e.g.:
+Of course, you can also just run:
 
 ```bash
-gotestsum --packages="./protocol/communities" -f standard-verbose --rerun-fails -- -v -count 1
+make test
 ```
+
+I found running tests using `gotestsum` more reliable and more appropriate for development.
 
 To be more selective, e.g. in order to run all the tests from 
 `CodexArchiveDownloaderSuite`, run:
@@ -221,7 +237,7 @@ gotestsum --packages="./protocol/communities" -f testname --rerun-fails -- -run 
 or for an individual test from that suite:
 
 ```bash
-gotestsum --packages="./protocol/communities" -f testname --rerun-fails -- -run TestCodexArchiveDownloaderSuite/TestCancellationDuringPolling -count 1
+gotestsum --packages="./protocol/communities" -f testname --rerun-fails -- -run CodexArchiveDownloaderSuite/TestCancellationDuringPolling -count 1
 ```
 
 Notice, that the `-run` flag accepts a regular expression that matches against the full test path, so you can be more concise in naming if necessary, e.g.:
@@ -230,71 +246,85 @@ Notice, that the `-run` flag accepts a regular expression that matches against t
 gotestsum --packages="./protocol/communities" -f testname --rerun-fails -- -run CodexArchiveDownloader/Cancellation -count 1
 ```
 
-This also applies to native `go test` command.
-
-### Running integration tests
-
-When building Codex client for testing like here, I often remove some logging noise, by slightly changing the build params in `build.nims`:
-
-```nim
-task codex, "build codex binary":
-  buildBinary "codex",
-    # params = "-d:chronicles_runtime_filtering -d:chronicles_log_level=TRACE"
-    params =
-      "-d:chronicles_runtime_filtering -d:chronicles_log_level=TRACE -d:chronicles_enabled_topics:restapi:TRACE,node:TRACE"
-```
-
-You see a slightly more selective `params` in the `codex` task.
-
-To start Codex client, use e.g.:
+This also applies to native `go test` command, e.g.:
 
 ```bash
-./build/codex --data-dir=./data-1 --listen-addrs=/ip4/127.0.0.1/tcp/8081 --api-port=8001 --nat=none --disc-port=8091 --log-level=TRACE
+go test -v ./protocol/communities -count 1 -run CodexArchiveDownloaderSuite/TestCancellationDuringPolling
 ```
 
-To run the integration test, use `codex_integration` tag and narrow the scope using `-run Integration`:
+
+For a more verbose output including logs use `-f standard-verbose`, e.g.:
 
 ```bash
-CODEX_API_PORT=8001 go test -v -tags=codex_integration ./protocol/communities -run Integration -timeout 15s
+gotestsum --packages="./protocol/communities" -f standard-verbose --rerun-fails -- -v -count 1 -run CodexArchiveDownloaderSuite/TestCancellationDuringPolling
 ```
 
-This will run all integration tests, including `CodexClient` integration tests.
-
-To make sure that the test is actually run and not cached, use `count` option:
+Finally, the relevant Codex integration tests from the `./protocol` module run:
 
 ```bash
-CODEX_API_PORT=8001 go test -v -tags=codex_integration ./protocol/communities -run Integration -timeout 15s -count 1
+gotestsum --packages="./protocol" -f testname -- -count 1 -tags "gowaku_no_rln gowaku_skip_migrations" -run TestMessengerCommunitiesTokenPermissionsSuite/Codex
+PASS protocol.TestMessengerCommunitiesTokenPermissionsSuite/TestUploadDownloadCodexHistoryArchives (5.44s)
+PASS protocol.TestMessengerCommunitiesTokenPermissionsSuite/TestUploadDownloadCodexHistoryArchives_withSharedCodexClient (5.50s)
+PASS protocol.TestMessengerCommunitiesTokenPermissionsSuite (10.94s)
+PASS protocol
+
+DONE 3 tests in 10.968s
 ```
 
-To be more specific and only run the tests related to, e.g. index downloader or archive
-downloader you can use:
+### Running functional tests
+
+Here we use our convenience scripts. First we build the docker image running:
 
 ```bash
-CODEX_API_PORT=8001 go test -v -tags=codex_integration ./protocol/communities -run CodexIndexDownloaderIntegration -timeout 15s -count 1
-
-CODEX_API_PORT=8001 go test -v -tags=codex_integration ./protocol/communities -run CodexArchiveDownloaderIntegration -timeout 15s -count 1
+_assets/scripts/build_status_go_docker.sh
 ```
 
-and then, if you prefer to use `gotestsum`:
+> We run all the commands from the top-level project directory
+
+And then:
 
 ```bash
-CODEX_API_PORT=8001 gotestsum --packages="./protocol/communities" -f standard-verbose --rerun-fails -- -tags=codex_integration -run CodexIndexDownloaderIntegration -v -count 1
+./_assets/scripts/run_functional_tests_dev.sh TestCommunityArchives
+Using existing virtual environment
+Installing dependencies
+Discovering tests to be run...
+Found 5 tests matching: TestCommunityArchives
+Tests to execute:
+ 1) test_community_archive_index_exists
+ 2) test_community_archive_exists_for_default_chat
+ 3) test_archive_is_not_created_without_messages
+ 4) test_different_archives_are_created_with_multiple_messages
+ 5) test_archive_is_downloaded_after_logout_login
+Continue with execution? (y/n): y
+...
+tests-functional/tests/test_wakuext_community_archives.py::TestCommunityArchives::test_community_archive_exists_for_default_chat
+tests-functional/tests/test_wakuext_community_archives.py::TestCommunityArchives::test_community_archive_index_exists
+tests-functional/tests/test_wakuext_community_archives.py::TestCommunityArchives::test_archive_is_downloaded_after_logout_login
+tests-functional/tests/test_wakuext_community_archives.py::TestCommunityArchives::test_different_archives_are_created_with_multiple_messages
+tests-functional/tests/test_wakuext_community_archives.py::TestCommunityArchives::test_archive_is_not_created_without_messages
+[gw1] [ 20%] PASSED tests-functional/tests/test_wakuext_community_archives.py::TestCommunityArchives::test_community_archive_exists_for_default_chat
+[gw2] [ 40%] PASSED tests-functional/tests/test_wakuext_community_archives.py::TestCommunityArchives::test_archive_is_not_created_without_messages
+[gw3] [ 60%] PASSED tests-functional/tests/test_wakuext_community_archives.py::TestCommunityArchives::test_different_archives_are_created_with_multiple_messages
+[gw4] [ 80%] PASSED tests-functional/tests/test_wakuext_community_archives.py::TestCommunityArchives::test_archive_is_downloaded_after_logout_login
+[gw0] [100%] PASSED tests-functional/tests/test_wakuext_community_archives.py::TestCommunityArchives::test_community_archive_index_exists
 
-CODEX_API_PORT=8001 gotestsum --packages="./protocol/communities" -f standard-verbose --rerun-fails -- -tags=codex_integration -run CodexArchiveDownloaderIntegration -v -count 1
+======================================================================== 5 passed in 141.69s (0:02:21) =========================================================================
+Testing finished
+Running cleanup...
 ```
 
-or to run all integration tests (including `CodexClient` integration tests):
+You can also run a single test as follow:
 
 ```bash
-CODEX_API_PORT=8001 gotestsum --packages="./protocol/communities" -f standard-verbose --rerun-fails -- -tags=codex_integration -v -count 1 -run Integration
+./_assets/scripts/run_functional_tests_dev.sh test_community_archive_index_exists
 ```
 
-I prefer to be more selective when running integration tests.
-### Main integration test
+The logs are in `tests-functional/logs`.
+## More notes
 
-This is about step 3 above: "Codex" version of `protocol/communities_messenger_token_permissions_test.go`.
+For the Codex-related tests in `protocol/communities_messenger_token_permissions_test.go`, in we add some more context below.
 
-The test we are particularly interested in is `TestImportDecryptedArchiveMessages`.
+Our two "Codex"-related tests are based on `TestImportDecryptedArchiveMessages` test.
 
 This test produces lots of output - with lot's warnings and errors - so looking at the log to judge the success would be a challenge. Yet, the test passes:
 
@@ -374,7 +404,7 @@ The `CreateHistoryArchiveTorrentFromDB` is called directly here, in a way bypass
 
 The "Codex" version of the `CreateHistoryArchiveTorrentFromDB` is `CreateHistoryArchiveCodexFromDB` which will call `createHistoryArchiveCodex` - this is where archives are created and uploaded to Codex.
 
-Another function that this test "touches" is `LoadHistoryArchiveIndexFromFile`, for which the "Codex" version is `CodexLoadHistoryArchiveIndexFromFile`.
+Another function that this test "touches" is `LoadHistoryArchiveIndexFromFile`, for which the "Codex" version is `CodexLoadHistoryArchiveIndex`. Notice, we do not need to load it from a *file* anymore - Codex takes care.
 
 Thus, this test focuses on an important cut of the whole end-to-end flow and in our case, where we use Codex, it also indirectly tests seeding and retrieving the archives from the network.
 
@@ -384,13 +414,16 @@ The integration test described above does not cover actual publishing of the gen
 
 ```
 CreateAndSeedHistoryArchive
- |- CreateHistoryArchiveTorrentFromDB
- |- SeedHistoryArchiveTorrent
- |- CreateHistoryArchiveCodexFromDB
+ |- if distributionPreference == Torrent
+     |- CreateHistoryArchiveTorrentFromDB
+     |- SeedHistoryArchiveTorrent
+ |- if distributionPreference == Codex
+     |- CreateHistoryArchiveCodexFromDB
+     |- SeedHistoryArchiveIndexCid (only in some cases: Codex takes care for seeding)
  |- publish: HistoryArchiveSeedingSignal
 ```
 
-We see that we seed the index file and the archives for both torrent and Codex and when at least one publishing method succeeds, we do:
+Depending on the *distribution preference* (Codex or Torrent) we either seed the index file and the archives for torrent or for Codex and when at least one publishing method succeeds, we do:
 
 ```go
 m.publisher.publish(&Subscription{
@@ -426,8 +459,8 @@ The `dispatchMagnetlinkMessage` and `dispatchIndexCidMessage` is where dispatchi
 The message is sent as follows:
 
 ```go
-chatID := community.MagnetlinkMessageChannelID()
-rawMessage := messagingtypes.RawMessage{
+chatID := community.UniversalChatID()
+rawMessage := common.RawMessage{
 	LocalChatID:          chatID,
 	Sender:               community.PrivateKey(),
 	Payload:              encodedMessage,
@@ -452,7 +485,7 @@ return m.communitiesManager.UpdateIndexCidMessageClock(community.ID(), indexCidM
 Here notice the call to `UpdateCommunityDescriptionIndexCidMessageClock`. As you can see, the clocks are also recorded in the community description. Community description is sent over waku to other community members periodically (every 5mins) or on some events. This how it is sent in `publishOrg` in `protocol/messenger_communities.go`:
 
 ```go
-rawMessage := messagingtypes.RawMessage{
+rawMessage := common.RawMessage{
 	Payload: payload,
 	Sender:  org.PrivateKey(),
 	// we don't want to wrap in an encryption layer message
@@ -477,7 +510,7 @@ messageID, err := m.messaging.SendPublic(context.Background(), org.IDString(), r
 
 When community members receive the community description, they compare the clocks in the community description with the most recent clocks of the most recent magnet link or index Cid. IF the clocks in the community description are newer (more recent), they update the local copies, so that when a new magnet link or index Cid message arrives, they know to ignore outdated messages.
 
-To read more, check: [[History Archives and Community Description]].
+To read more, check: [[History Archives and Community Description]] (AI session recording).
 
 This naturally brought us to the reception of the magnet links/index Cid (see also [[status-go processing magnet links]] and [[status-go publishing magnet links]]).
 
