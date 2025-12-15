@@ -5,7 +5,7 @@ This is our documentation repository. All documents that need to be recorded and
 First, clone this repo to a local directory on your computer (e.g. `~/Documents/obsidian/codex):
 
 ```bash
-git clone git@github.com:codex-storage/codex-docs-obsidian.git
+git clone git@github.com:logos-storage/logos-storage-docs-obsidian.git
 ```
 
 Then install [Obsidian App](https://obsidian.md/download) (use the best method suitable for you OS).
