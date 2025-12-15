@@ -1,6 +1,6 @@
 ---
 related-to:
-  - "[[Team-NLBR Solution Proposal]]"
+  - "[[High-Level Solution Proposal]]"
   - "[[status-go publishing magnet links]]"
   - "[[status-go processing magnet links]]"
   - "[[status-go-codex integration - design notes]]"

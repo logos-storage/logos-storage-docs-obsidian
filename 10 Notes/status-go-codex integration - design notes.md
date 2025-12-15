@@ -1,6 +1,6 @@
 ---
 related-to:
-  - "[[Team-NLBR Solution Proposal]]"
+  - "[[High-Level Solution Proposal]]"
   - "[[status-go publishing magnet links]]"
   - "[[status-go processing magnet links]]"
   - "[[status-go-codex integration - design notes]]"
@@ -11,7 +11,7 @@ The notes in this document aim at recording our path towards the Codex integrati
 
 ## Codex for History Archives
 
-As indicated in the [[Team-NLBR Solution Proposal]], the central entry point to the history management is [InitHistoryArchiveTasks](https://github.com/status-im/status-go/blob/6322f22783585474803cfc8a6f0a914757d763b5/protocol/messenger_communities.go#L3783). `InitHistoryArchiveTasks` is called from **two main places**:
+As indicated in the [[High-Level Solution Proposal]], the central entry point to the history management is [InitHistoryArchiveTasks](https://github.com/status-im/status-go/blob/6322f22783585474803cfc8a6f0a914757d763b5/protocol/messenger_communities.go#L3783). `InitHistoryArchiveTasks` is called from **two main places**:
 - During `Messenger.Start()` (startup)
 - When enabling archive protocol
 

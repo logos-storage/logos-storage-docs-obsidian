@@ -2,7 +2,7 @@
 related-to:
   - "[[status-go-codex integration - design notes]]"
 ---
-In [[Running Unit Tests for status-go]] we provide general notes on running unit tests in the status-go project. And then we have a similar note about functional tests in [[Running functional tests in status-go]].
+                                                                               In [[Running Unit Tests for status-go]] we provide general notes on running unit tests in the status-go project. And then we have a similar note about functional tests in [[Running functional tests in status-go]].
 
 Also, to learn the history archive creation/upload and download/processing flows (recorded AI conversation with some edits), please check:
 
