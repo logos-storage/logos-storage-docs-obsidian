@@ -203,7 +203,7 @@ This data file is temporary and will be overwritten for each new archive created
 
 Now, just for convenience, let's recall the original data structures involved:
 
-![[team-nl-br-design-1.svg]]
+![[codex-status-go-design-1.svg]]
 
 The data structures using with BitTorrent are:
 

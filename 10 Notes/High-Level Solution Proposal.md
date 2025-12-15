@@ -130,11 +130,11 @@ Finally, the corresponding torrent file is (re)created, the `HistoryArchivesCrea
 
 The diagram below shows the relationships between the datatypes described above:
 
-![[team-nl-br-design-1.svg]]
+![[codex-status-go-design-1.svg]]
 
 And then in the following diagram we show how the `index` and `data` files are populated, the corresponding torrent file and the magnet link:
 
-![[team-nl-br-design-2.svg]]
+![[codex-status-go-design-2.svg]]
 
 ## Archive Distribution and Download
 
@@ -172,7 +172,7 @@ In order to receive the historical messages for the given period (given by `from
 
 The diagram below shows the relationship between the new `index` identified by a Codex CID that uses individual CIDs to refer to each individual archive:
 
-![[team-nl-br-design-3.svg]]
+![[codex-status-go-design-3.svg]]
 
 ### Advantages
 
@@ -191,7 +191,7 @@ In the first prototype, we suggest to use Codex API in order to validate the ide
 
 Creating the Codex library was not only long requested by IFT, but it also bring opportunity to rethink the system interfaces and work towards more modular, "plugable" design. In its first instance Codex library could be made of just the block-exchange protocol, discovery module (DHT), and *RepoStore* (block storage) - each of those could potentially be also separated into separate sub-libraries. By providing bindings for various programming languages, we can better stimulate community clients, our original Codex client being one of them. The illustration below shows a high-level overview of the composition and use of the Codex library.
 
-![[team-nl-br-design-4.svg]]
+![[codex-status-go-design-4.svg]]
 
 ## Changes required in the status-go client
 
