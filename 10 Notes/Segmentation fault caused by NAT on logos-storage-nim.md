@@ -1,0 +1,20 @@
+Regarding the segmentation fault, I had some iterations with gpt-5-codex and here is an edited summary:
+
+- The crash happens immediately after `Switch.start()` completes in `vendor/nim-codex/codex/codex.nim` (line `238`), before any of the block‑exchange or discovery logs appear. The next code that runs is `nattedAddress(...)`, so the blow‑up is occurring while we compute NAT mappings, not inside libp2p.
+- `vendor/nim-codex/codex/nat.nim` keeps all runtime state in module‑level globals (`strategy`, `extIp`, `natClosed`, `activeMappings`, `natThreads`) plus a single `addQuitProc(stopNatThreads)` hook. That design only works when one node lives in the process. As soon as you create a second node, both instances mutate the same sequences and atomics:
+	- `redirectPorts` appends to the shared `activeMappings/natThreads` and spawns a renewal thread for every caller. Those renewal threads and any later redirectPorts invocations then race over the same global state.
+	- When the first node shuts down (or when the quit proc runs) `stopNatThreads()` sets the shared `natClosed` atomic to `true`, tears down all threads and deletes every mapping in `activeMappings`, regardless of which node created them. The other live node continues executing with stale NAT state and dangling C pointers, which is consistent with the `SIGSEGV` you’re observing when the second node starts up.
+	- Because the globals are never re‑initialised (`natClosed` never flips back to `false`, `activeMappings` is never cleared safely), the second node inherits half torn‑down structures. That’s why the bug only shows up once you create another node in the same process.
+- The behaviour matches your platform reports: on Ubuntu (CI) we don’t hit the race because the NAT code exits early (CI runs in environments without UPnP/NAT‑PMP), whereas on your AMD desktops the NAT calls succeed, meaning we actually enter the broken multi‑instance path and crash.
+- Also notice that the crash only happens once we actually go down the NAT path far enough to spin up per-process state and threads. Arnaud's Fedora does not suffer from the crash (regardless if he uses Nix or without Nix - I am **not** using Nix BTW), but that's can also be explained: if his Fedora is missing/blocked UPnP/NAT-PMP support, or the router refuses those protocols, `getExternalIP()` simply returns `none`. In that case `redirectPorts` and the renewal threads never run, so the global state never gets into a bad cross-node mix — the code just keeps the default `nat=any` without doing any mapping, and everything appears fine. On my AMD boxes the call likely succeeds (UPnP works), so the brittle shared state is exercised and I am hitting the segfault.
+
+To make multiple nodes safe, we need to turn NAT management into a per-node resource.
+
+The code on this branch is mostly authored by "gpt-5-codex" and so, it is just an entry point to actual work. The initial fix compiles and appears to work, but we had to temporarily disable the NAT port‑mapping renewal thread so we no longer spawn a background thread with `repeatPortMapping`. This cannot go to production like this as NAT will not be able to adjust to changing conditions, but, I think it is a great start.
+
+With this initial fix, I can at least start two nodes one after another with libcodex and even two of them at the same time, even with NAT set to `any`. Also apparently it fixed some logging issues that I have observed - for some combination of log levels for the codex nodes in one process, the node that stops second could in some circumstances hang on `stop` and `destroy` operations. With this initial fix, it seems not to be a problem any more.
+
+To experiments with libcodex, and to experience the problem yourself, you may like to check the following two repos:
+
+- https://github.com/codex-storage/codex-go-bindings
+- https://github.com/codex-storage/go-codex-client (can be good for isolated experiments and test runs)
