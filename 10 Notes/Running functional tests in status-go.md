@@ -80,7 +80,7 @@ docker compose -p "status-go-func-tests-$(git rev-parse --short HEAD)" -f tests-
 
 You will have the following containers running:
 
-![[Pasted image 20250911204521.png]]
+![[Running functional tests in status-go_0.png]]
 
 Now, with everything in place, we can run the tests:
 

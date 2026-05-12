@@ -43,7 +43,7 @@ Existing Mix format
 	- compact
 	- Computationally cheap
 
-![[Pasted image 20260331141209.png]]
+![[MixNets - Sphinx YouTube video_0.png]]
 
 - r - maximum length of the path (common value 3, 5, 10)
 - s - size of the symmetric key in bytes - how much we choose for s depends on the level of security we want - commonly at that time 80-bit security - 2^80 operations for an attacker to brake the system. Today we prefer to use around 128 bits (16 bytes)
@@ -53,20 +53,20 @@ Some examples:
 
 RSA-like…
 
-![[Pasted image 20260331142627.png]]
+![[MixNets - Sphinx YouTube video_1.png]]
 
 EC:
 
-![[Pasted image 20260331142912.png]]
+![[MixNets - Sphinx YouTube video_2.png]]
 
 Around 100 bytes for 80-bit security.
 
 ### Sphinx message format
 
-![[Pasted image 20260331143337.png]]
+![[MixNets - Sphinx YouTube video_3.png]]
 
-![[Pasted image 20260331144536.png]]
+![[MixNets - Sphinx YouTube video_4.png]]
 
 Now, we could be tempted to use the same alpha for each hop (and different for different message/recipient), but then the message coming into the mix node and one coming out to the mix node could be correlated.
 
-![[Pasted image 20260331145433.png]]
+![[MixNets - Sphinx YouTube video_5.png]]
