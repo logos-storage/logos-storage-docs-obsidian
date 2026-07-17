@@ -39,6 +39,11 @@ jobs:
           cd quartz
           npm ci
 
+      - name: Install Quartz plugins
+        run: |
+          cd quartz
+          npx quartz plugin install
+
       - name: Build Quartz site
         run: |
           cd quartz
