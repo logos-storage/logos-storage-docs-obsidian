@@ -35,9 +35,12 @@ jobs:
 
       - name: Install Quartz
         run: |
-          git clone https://github.com/jackyzha0/quartz.git
+          git clone --branch v5 --depth 1 https://github.com/jackyzha0/quartz.git
           cd quartz
           npm ci
+
+      - name: Configure Quartz
+        run: cp .quartz/quartz.config.yaml quartz/quartz.config.yaml
 
       - name: Install Quartz plugins
         run: |
@@ -49,9 +52,7 @@ jobs:
           cd quartz
           cp -r ../* content/ || true
           rm -rf content/.git content/.github content/quartz
-          npx quartz build
-        env:
-          BASE_URL: ${{ steps.pages.outputs.base_url }}
+          npx quartz build --baseDir "/logos-storage-docs-obsidian"
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
