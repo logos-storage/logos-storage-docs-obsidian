@@ -3,7 +3,7 @@ This is another document from the [[Mix Implementation]] series. In the other tw
 - [[libp2p MIX Architecture and API]]
 - [[Sphinx SURBs implementation in the libp2p MIX protocol]]
 
-you can find a high level overview I created interactively with OpenAI Codex. This note is fully hand-crafted though.
+you can find a high level overview I created interactively with OpenAI GPT-5.5. This note is fully hand-crafted though.
 
 We also have a detailed illustrated example in [[Sphinx Header Processing Infographic]] with the web version available at https://link.excalidraw.com/readonly/6y7DRQlUhkkBMZScEONS.
 
