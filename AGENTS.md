@@ -6,6 +6,9 @@
 - GitHub Pages URL: `https://logos-storage.github.io/logos-storage-docs-obsidian/`.
 - The workflow clones Quartz from `jackyzha0/quartz` branch `v5` and copies committed config from `.quartz/` into the cloned Quartz checkout.
 - Keep Quartz config explicit in this repo under `.quartz/`; avoid dynamic CI patching unless there is a concrete reason.
+- The workflow applies `.quartz/patch-crawl-links-object-data.mjs` after `npx quartz plugin install` because the current `quartz-community/crawl-links` plugin resolves `img[src]` but not SVG embed `object[data]` URLs.
+- The crawl-links patch makes basename SVG embeds such as `![[diagram.svg]]` resolve to emitted asset paths like `../90-extras/92-assets/diagram.svg` instead of broken note-relative URLs.
+- `.quartz/custom.scss` constrains SVG embeds rendered as `<object type="image/svg+xml">` to the article width with `width: 100%`, `max-width: 100%`, and `height: auto`; do not use hardcoded per-file aspect ratios unless a specific SVG needs a targeted exception.
 - `baseUrl` in `.quartz/quartz.config.yaml` should remain `logos-storage.github.io/logos-storage-docs-obsidian` with no protocol and no trailing slash.
 - The Quartz build should use `--baseDir "/logos-storage-docs-obsidian"` for correct GitHub Pages project-site routing.
 - Dates are based on latest git commit mtimes, set by the workflow before building.
@@ -61,11 +64,12 @@ article mjx-container.MathJax:not([display="true"]) {
 - Do not remove Obsidian Excalidraw embeds just to fix Quartz output; suppress the rendered Excalidraw source in Quartz instead.
 - `.quartz/custom.scss` hides unresolved Excalidraw transclude placeholders with `article blockquote.transclude[data-url$=".excalidraw"]`.
 - The unresolved Excalidraw transclude may still be present in generated HTML, but it should not be visible because the bundled CSS hides it.
+- If an Obsidian note embeds a generated `.excalidraw.svg` by basename, the crawl-links patch should rewrite the generated `<object data="...">` URL to the emitted asset path under `90-extras/92-assets`.
 - Verification for Excalidraw pages should confirm: the source note still contains the Obsidian embed, raw sections such as `Excalidraw Data`, `Text Elements`, and `Embedded Files` are absent from generated HTML, no standalone `*excalidraw*` HTML page is emitted, and the explanatory blockquote remains visible.
 
 ## Local Verification
 
-- A CI-like local build can be run by cloning Quartz v5 into `/tmp/opencode`, copying the vault into `content`, copying `.quartz/quartz.config.yaml` and `.quartz/custom.scss`, installing plugins, and running `npx quartz build --baseDir "/logos-storage-docs-obsidian"` from the Quartz checkout.
+- A CI-like local build can be run by cloning Quartz v5 into `/tmp/opencode`, copying the vault into `content`, copying `.quartz/quartz.config.yaml` and `.quartz/custom.scss`, installing plugins, patching crawl-links with `QUARTZ_CHECKOUT="/tmp/opencode/<build>/quartz" node .quartz/patch-crawl-links-object-data.mjs`, and running `npx quartz build --baseDir "/logos-storage-docs-obsidian"` from the Quartz checkout.
 - When serving a local build, use:
 
 ```bash

@@ -49,6 +49,10 @@ jobs:
           cd quartz
           npx quartz plugin install
 
+      - name: Patch Quartz SVG asset links
+        run: |
+          node .quartz/patch-crawl-links-object-data.mjs
+
       - name: Build Quartz site
         run: |
           cd quartz

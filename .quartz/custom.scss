@@ -35,13 +35,12 @@ article blockquote.transclude[data-url$=".excalidraw"] {
   display: none;
 }
 
-article object[type="image/svg+xml"][data$=".excalidraw.svg"] {
+article object[type="image/svg+xml"] {
   box-sizing: border-box;
   display: block;
   width: 100%;
   max-width: 100%;
   height: auto;
-  aspect-ratio: 6512.9912768555005 / 3759.558951865009;
 }
 
 @media all and (min-width: 800px) and (max-width: 1200px) {
