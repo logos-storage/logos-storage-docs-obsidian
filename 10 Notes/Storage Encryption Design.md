@@ -1,9 +1,9 @@
 ---
 related-to:
-  - "[[Codex Encryption Basis]]"
+  - "[[Storage Encryption Basis]]"
   - "[[How to get a pointer to a seq to pass it to a C library]]"
 ---
-As summarized in [[Codex Encryption Basis#^b2e265|the proposal]], we:
+As summarized in [[Storage Encryption Basis#^b2e265|the proposal]], we:
 
 - use a freshly generated random master key (at least 256 bits) per dataset (generated and kept on the user's machine)
 - derive a new encryption key and also an IV for each block from the master key and the block index

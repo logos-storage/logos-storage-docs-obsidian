@@ -1,7 +1,7 @@
 ---
 related-to:
-  - "[[Codex Encryption Design]]"
-  - "[[Codex Encryption Implementation]]"
+  - "[[Storage Encryption Design]]"
+  - "[[Storage Encryption Implementation]]"
 ---
 We want some kind of encryption of user data, definitely on by default (maybe even enforced in all cases).
 

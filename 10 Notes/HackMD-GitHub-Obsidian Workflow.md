@@ -15,4 +15,4 @@ The workflow is the following:
 10. Consider deleting the merged content and the "branch" folder from HackMD.
     _HackMD does not seem to have any convenient way to export comments, so if you need to preserve the conversation, I would consider creating a separate document and copy the conversation or its summary there. Keeping the document hanging in HackMD sooner or later will result in a mass. Let's build a good habit: **all documents in GitHub**._
 
-Consider checking our [[Using Codex Obsidian Vault Video Tutorials]]. There is one about using HackMD, GitHub, and Obsidian together.
+Consider checking our [[Using Logos Storage Obsidian Vault Video Tutorials]]. There is one about using HackMD, GitHub, and Obsidian together.

@@ -1,5 +1,5 @@
 
-Undigested chat on the options we have for structuring a C Codex API on top of Chronos code.
+Undigested chat on the options we have for structuring a C Storage API on top of Chronos code.
 
 ### Giuliano (part-time) _—_ 9:15 AM
 

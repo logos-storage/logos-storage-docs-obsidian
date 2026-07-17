@@ -1,5 +1,5 @@
 We show how to use symmetric encryption in BearSSL to encrypt and decrypt the content.
-This is a very basic code demonstrating the use of the BearSSL symmetric encryption API. In [[Codex Encryption Design]] we show a more complete example. In the code below we also use [[BearSSL]] to generate a random number. See [[How to generate a random number using BearSSL]] for more details:
+This is a very basic code demonstrating the use of the BearSSL symmetric encryption API. In [[Storage Encryption Design]] we show a more complete example. In the code below we also use [[BearSSL]] to generate a random number. See [[How to generate a random number using BearSSL]] for more details:
 
 ```nim
 import std/sequtils

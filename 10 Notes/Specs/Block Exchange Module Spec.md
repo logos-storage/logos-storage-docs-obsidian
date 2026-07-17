@@ -1,10 +1,10 @@
-# Codex Block Exchange Specification
+# Block Exchange Specification
 
-The Block Exchange (BE) is a core component of Codex and is responsible for peer-to-peer content distribution. It handles the sending and receiving of blocks across the network, enabling efficient data sharing between Codex nodes.
+The Block Exchange (BE) is a core component of Logos Storage and is responsible for peer-to-peer content distribution. It handles the sending and receiving of blocks across the network, enabling efficient data sharing between Storage nodes.
 
 ## Overview
 
-The Codex Block Exchange defines both an internal service and a protocol through which Codex nodes can refer to, and provide data blocks to one another. Blocks are uniquely identifiable by means of an _address_, and represent fixed-length chunks of arbitrary data. 
+The Storage Block Exchange defines both an internal service and a protocol through which Storage nodes can refer to, and provide data blocks to one another. Blocks are uniquely identifiable by means of an _address_, and represent fixed-length chunks of arbitrary data. 
 
 Whenever a peer $A$ wishes to obtain a block, it registers its unique address with the BE, and the BE will then be in charge of procuring it; i.e, of finding a peer that has block, if any, and then downloading it. The BE will also accept requests from peers connected to $A$ which might want blocks that $A$ has, and provide them.
 
@@ -13,20 +13,20 @@ Whenever a peer $A$ wishes to obtain a block, it registers its unique address wi
 1. have $b$;
 2. are reasonably expected to obtain $b$ in the future.
 
-In practical implementations, the BE will typically require the support of an underlying _discovery service_, e.g., the [Codex DHT](), to look up such peers, but this is beyond the scope of this document.
+In practical implementations, the BE will typically require the support of an underlying _discovery service_, e.g., the Storage DHT, to look up such peers, but this is beyond the scope of this document.
 
 ### Block Format
 
-Blocks in Codex can be of two different types:
+Blocks in Storage can be of two different types:
 
 * **standalone blocks** are self-contained pieces of data addressed by a content ID made from the SHA256 hash of the contents of the block;
 * **dataset blocks**, instead, are part of an ordered set (a dataset) and can be _additionally_ addressed by a `(datasetCID, index)` tuple which indexes the block within that dataset. `datasetCID`, here, represents the root of a Merkle tree computed over all the blocks in the dataset. In other words, a dataset block can be addressed both as a standalone block (by a CID computed over the contents of the block), or as an index within an ordered set identified by a Merkle root.
 
 Formally, we can define a block as tuple consisting of raw data and its content identifier: `(data: seq[byte], cid: Cid)`, where standalone blocks are addressed by `cid`, and dataset blocks can be addressed either by `cid` or a `(datasetCID, index)` tuple.
 
-**Creating blocks.** Blocks in Codex have default size of 64 KiB. Blocks within a dataset must be all of the same size. If a dataset does not contain enough data to fill its last block, it MUST be padded with zeroes.
+**Creating blocks.** Blocks in Storage have default size of 64 KiB. Blocks within a dataset must be all of the same size. If a dataset does not contain enough data to fill its last block, it MUST be padded with zeroes.
 
-**Multicodec/Multihash.** The libp2p multicodec for a block CID is `codex-block` (0xCD02), while the multihash is `sha2-256` (0x12).
+**Multicodec/Multihash.** The libp2p multicodec for a block CID is `storage-block` (0xCD02), while the multihash is `sha2-256` (0x12).
 
 ### Service Interface
 
@@ -56,7 +56,7 @@ In practice, the BE relies on other modules and services:
 The Block Exchange Protocol uses the following libp2p protocol identifier:
 
 ```
-/codex/blockexc/1.0.0
+/storage/blockexc/1.0.0
 ```
 
 ## Connection Model
@@ -103,7 +103,7 @@ message Message {
 
 ### Block Addressing
 
-Codex uses a block addressing scheme that supports both standalone content-addressed blocks and blocks within Merkle tree structures.
+Storage uses a block addressing scheme that supports both standalone content-addressed blocks and blocks within Merkle tree structures.
 
 ```protobuf
 message BlockAddress {
@@ -180,12 +180,12 @@ message BlockDelivery {
 - `cid`: Content identifier of the block
 - `data`: Raw block data (up to 100 MiB)
 - `address`: The address that was requested
-- `proof`: Merkle proof (CodexProof) verifying block correctness (required for dataset blocks)
+- `proof`: Merkle proof (StorageProof) verifying block correctness (required for dataset blocks)
 
 **Merkle Proof Verification:**
 
 When delivering dataset blocks (`address.leaf = true`):
-- The delivery must include a Merkle proof (CodexProof)
+- The delivery must include a Merkle proof (StorageProof)
 - The proof verifies that the block at the given index is correctly part of the Merkle tree identified by the tree CID
 - This applies to all datasets, irrespective of whether they have been erasure-coded or not
 - Recipients must verify the proof before accepting the block

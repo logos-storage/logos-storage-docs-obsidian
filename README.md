@@ -14,6 +14,6 @@ Finally, open the cloned folder (a vault) in Obsidian.
 
 Now you have a searchable Codex documentation vault under your full control. Everything you do in Obsidian remains private as long as you do not commit and push your changes to GitHub. Our `.gitignore` keeps some of the vault file ignored, meaning they will stay only visible to your Obsidian installation. For instance, the publishing settings and the workspace configuration (kept in the `.obsidian` folder) are excluded from GitHub syncing, as those are personal and change every time you open the vault. You can read more about what is ignored in [[Ignored Obsidian Vault files]].
 
-> To get some background about Obsidian and *Knowledge Management Systems*, please check [[Short Introduction to Obsidian]]. We also have some video tutorials: see [[Using Codex Obsidian Vault Video Tutorials]].
+> To get some background about Obsidian and *Knowledge Management Systems*, please check [[Short Introduction to Obsidian]]. We also have some video tutorials: see [[Using Logos Storage Obsidian Vault Video Tutorials]].
 
-Now, when you have everything up and running, learn a bit more about our documentation setup and how to take full advantage of it. See [[Codex Documentation Setup]] in - of course - Obsidian.
+Now, when you have everything up and running, learn a bit more about our documentation setup and how to take full advantage of it. See [[Logos Storage Documentation Setup]] in - of course - Obsidian.
