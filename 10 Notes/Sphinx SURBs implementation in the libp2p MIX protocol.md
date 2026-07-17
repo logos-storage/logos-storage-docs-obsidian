@@ -1,4 +1,4 @@
-The copy of this document can be found in [https://github.com/logos-storage/libp2p-storage-mix-transport/blob/master/docs/surb.md](https://github.com/logos-storage/libp2p-storage-mix-transport/blob/master/docs/surb.md). The content of this document should contain the most recent version.
+The copy of this document can be found in [https://github.com/logos-storage/libp2p-storage-mix-transport/blob/master/docs/surb.md](https://github.com/logos-storage/libp2p-storage-mix-transport/blob/master/docs/surb.md). The content available in the Obsidian vault should be considered the most recent version.
 
 > This document belong to the series of [[Mix Implementation]] notes.
 
@@ -7,11 +7,10 @@ vendored libp2p MIX implementation at
 `nimbledeps/pkgs2/libp2p-*/libp2p/protocols/mix`.
 
 It maps the implementation to the MIX spec, with special attention to the newer
-SURB section in pull request 307:
+SURB section in [pull request 307](https://github.com/logos-co/logos-lips/pull/307):
 
-- Published MIX LIP: https://lip.logos.co/ift-ts/raw/mix.html
-- Pull request 307: https://github.com/logos-co/logos-lips/pull/307
-- Pull request snapshot, Section 8.7: https://github.com/logos-co/logos-lips/blob/bfd845f11c5ee4edc1d425c7c4a2b941285fd9a3/docs/ift-ts/raw/mix.md#87-single-use-reply-blocks
+- Published MIX LIP: https://lip.logos.co/anoncomms/raw/mix.html
+- SURB section in the SPEC: https://lip.logos.co/anoncomms/raw/mix.html#87-single-use-reply-blocks
 
 The published LIP still contains older wording saying reply support is not
 implemented yet. The pull request snapshot adds Section 8.7, which describes

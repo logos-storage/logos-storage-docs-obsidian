@@ -1,0 +1,58 @@
+- MIX THEORY
+	- Mix spec: https://lip.logos.co/anoncomms/raw/mix.html
+	- SURBs
+		- Sphinx: A Compact and Provably Secure Mix Format: https://cypherpunks.ca/~iang/pubs/Sphinx_Oakland09.pdf
+		- Sphinx YouTube video: https://youtu.be/34TKXELJa2c?is=J8G4cNyG3djsWdtm
+		- In-depth treatment by Balazs: https://hackmd.io/@bkomuves/SJzVxYMsZl
+		- SURB section in the SPEC: https://lip.logos.co/anoncomms/raw/mix.html#87-single-use-reply-blocks
+			- PR: https://github.com/vacp2p/rfc-index/pull/307
+		- Sphinx Header Processing Example: https://hackmd.io/P-lbrq-iS7ui0WVcuw1rNA
+			- Also available in our Obsidian Vault: https://github.com/logos-storage/logos-storage-docs-obsidian
+				- Search for "Sphinx Header Processing Example".
+- MIX IMPLEMENTATION:
+	- Main Mix Repo: https://github.com/logos-co/nim-libp2p-mix
+	- Examples:
+		- From Main Mix Repo:
+			- examples
+				- https://github.com/logos-co/nim-libp2p-mix/blob/master/examples/mix_ping.nim
+			- additional examples of how to use MIX in its default mode when `exit node == destination`:
+				- https://github.com/logos-co/nim-libp2p-mix/blob/feat/runtime-mix-exit-destination-dispatch/examples/mix_ping_mix_node.nim
+				- relevant DRAFT PR: https://github.com/logos-co/nim-libp2p-mix/pull/11
+		- Standalone (extracted from the main repo for convenience)
+			- https://github.com/logos-storage/libp2p-mix-ping-example
+- Transport over MIX
+	- Transport layer over Mix - draft spec: https://hackmd.io/CykSpMIrRP6XA2byDiWurg
+		- Transport layer abstraction over Mix (initial notes from Balazs): https://hackmd.io/-6VNSq4iSpSQGu3xdJ6rOA
+	- Reference implementation in Haskel (from Balazs)
+		- https://github.com/logos-storage/transport-over-mix
+	- Nim implementation (placeholder):
+		- https://github.com/logos-storage/libp2p-storage-mix-transport
+		- includes some documents mirrored from Obsidian:
+			- https://github.com/logos-storage/libp2p-storage-mix-transport/tree/master/docs
+		- includes drafts implementations to encode the so-called "read-destination behavior" in the payload:
+			- mix-read-behavior-option-1: https://github.com/logos-storage/libp2p-storage-mix-transport/tree/mix-read-behavior-option-1
+			- mix-read-behavior-option-2:https://github.com/logos-storage/libp2p-storage-mix-transport/tree/mix-read-behavior-option-2
+				- preferred
+				- made it to a DRAFT PR on the Mix repo
+					- https://github.com/logos-co/nim-libp2p-mix/pull/11
+- Hidden Services
+	- Mix hidden service specification: https://hackmd.io/@codex-storage/BJ2V1TwsZg
+		- https://github.com/logos-co/logos-lips/pull/330
+	- Earlier documents
+		- Logos-Storage Anonymous Publishing: https://hackmd.io/@codex-storage/Hyy8v2nrZg
+- New Block Exchange Protocol
+	- New Block Protocol - Summary: https://hackmd.io/YKEKMFGgSAaHjVxKcz8n2w
+	- Bandwidth-Delay Product Estimations: Are we Doing It Right?: https://hackmd.io/2brFqqXzS9GQ4Ei5xe0gLw
+
+### Potential Next Steps
+
+- if you are new to MIX: look at MIX THEORY above
+- if you want to see it action: look at MIX Implementation
+- with some background, you can start building the MIX transport:
+	- Transport layer over Mix - draft spec: https://hackmd.io/CykSpMIrRP6XA2byDiWurg
+	- Reference implementation in Haskel (from Balazs)
+		- https://github.com/logos-storage/transport-over-mix
+	- start building
+		- the convention from the MIX implementation feels reasonable:
+			- a libp2p `Connection` as the transport interface
+			- start without erasure codding (can be added at a later step)

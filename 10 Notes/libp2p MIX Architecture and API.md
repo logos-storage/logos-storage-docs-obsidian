@@ -1,9 +1,8 @@
-The copy of this document can be found in [https://github.com/logos-storage/libp2p-storage-mix-transport/blob/master/docs/mix.md](https://github.com/logos-storage/libp2p-storage-mix-transport/blob/master/docs/mix.md). The content of this document should contain the most recent version.
+The copy of this document can be found in [https://github.com/logos-storage/libp2p-storage-mix-transport/blob/master/docs/mix.md](https://github.com/logos-storage/libp2p-storage-mix-transport/blob/master/docs/mix.md). The content available in the Obsidian vault should be considered the most recent version.
 
 > This document belong to the series of [[Mix Implementation]] notes.
 
-This document describes the MIX implementation vendored with this [project] under
-`nimbledeps/pkgs2/libp2p-*/libp2p/protocols/mix`. It focuses on how the code is
+This document describes the MIX implementation. It focuses on how the code is
 structured, what API surface is intended for callers, and what constraints matter
 when using MIX as a transport-like wrapper for other libp2p protocols.
 
