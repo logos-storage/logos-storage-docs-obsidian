@@ -744,7 +744,7 @@ $$
 \end{array}
 $$
 
-and after encrypting $\widetilde\beta_2\;\oplus\mathcal{S}_2[0,576)$ w:
+and after encrypting $\widetilde\beta_2\;\oplus\mathcal{S}_2[0,576)$ we get:
 
 $$
 \begin{matrix}
