@@ -12,6 +12,7 @@ configuration:
     - private
     - templates
     - .obsidian
+    - "**/*.excalidraw.md"
   theme:
     fontOrigin: googleFonts
     cdnCaching: true

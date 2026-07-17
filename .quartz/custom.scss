@@ -31,6 +31,10 @@ article mjx-container.MathJax:not([display="true"]) {
   word-break: normal;
 }
 
+article blockquote.transclude[data-url$=".excalidraw"] {
+  display: none;
+}
+
 @media all and (min-width: 800px) and (max-width: 1200px) {
   .page[data-frame="default"] > #quartz-body {
     grid-template-columns: 320px minmax(0, 1fr);
