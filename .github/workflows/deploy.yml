@@ -40,7 +40,9 @@ jobs:
           npm ci
 
       - name: Configure Quartz
-        run: cp .quartz/quartz.config.yaml quartz/quartz.config.yaml
+        run: |
+          cp .quartz/quartz.config.yaml quartz/quartz.config.yaml
+          cp .quartz/custom.scss quartz/quartz/styles/custom.scss
 
       - name: Install Quartz plugins
         run: |

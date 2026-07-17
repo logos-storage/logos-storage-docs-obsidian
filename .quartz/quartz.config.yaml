@@ -83,7 +83,21 @@ plugins:
   - source: github:quartz-community/latex
     enabled: true
     options:
-      renderEngine: katex
+      renderEngine: mathjax
+      mathJaxOptions:
+        loader:
+          load:
+            - "[tex]/ams"
+            - "[tex]/color"
+            - "[tex]/configmacros"
+            - "[tex]/enclose"
+        tex:
+          packages:
+            "[+]":
+              - ams
+              - color
+              - configmacros
+              - enclose
     order: 80
   - source: github:quartz-community/citations
     enabled: false
