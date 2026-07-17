@@ -47,7 +47,6 @@ plugins:
       defaultDateType: modified
       priority:
         - frontmatter
-        - git
         - filesystem
     order: 10
   - source: github:quartz-community/syntax-highlighting

@@ -50,8 +50,11 @@ jobs:
       - name: Build Quartz site
         run: |
           cd quartz
-          cp -r ../* content/ || true
-          rm -rf content/.git content/.github content/quartz
+          for path in ../*; do
+            [ "$(basename "$path")" = "quartz" ] && continue
+            cp -a "$path" content/
+          done
+          rm -rf content/.git content/.github
           npx quartz build --baseDir "/logos-storage-docs-obsidian"
 
       - name: Upload artifact
