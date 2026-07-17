@@ -9,6 +9,9 @@
 		- Sphinx Header Processing Example: https://hackmd.io/P-lbrq-iS7ui0WVcuw1rNA
 			- Also available in our Obsidian Vault: https://github.com/logos-storage/logos-storage-docs-obsidian
 				- Search for "Sphinx Header Processing Example".
+				- or use the web-version of the Obsidian vault:
+					- https://logos-storage.github.io/logos-storage-docs-obsidian/10-notes/sphinx-header-processing-example
+					- https://publish.obsidian.md/logos-storage/10+Notes/Sphinx+Header+Processing+Example
 - MIX IMPLEMENTATION:
 	- Main Mix Repo: https://github.com/logos-co/nim-libp2p-mix
 	- Examples:
