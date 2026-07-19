@@ -1,3 +1,6 @@
+> A copy of this document is also available at https://hackmd.io/D5zg08cWSe28oJzXxftFLQ
+> The web-version view of the vault can be found at https://logos-storage.github.io/logos-storage-docs-obsidian/10-notes/learning-mix
+
 - MIX THEORY
 	- Mix spec: https://lip.logos.co/anoncomms/raw/mix.html
 	- SURBs
@@ -26,7 +29,7 @@
 - Transport over MIX
 	- Transport layer over Mix - draft spec: https://hackmd.io/CykSpMIrRP6XA2byDiWurg
 		- Transport layer abstraction over Mix (initial notes from Balazs): https://hackmd.io/-6VNSq4iSpSQGu3xdJ6rOA
-	- Reference implementation in Haskel (from Balazs)
+	- Reference implementation in Haskell (from Balazs)
 		- https://github.com/logos-storage/transport-over-mix
 	- Nim implementation (placeholder):
 		- https://github.com/logos-storage/libp2p-storage-mix-transport
