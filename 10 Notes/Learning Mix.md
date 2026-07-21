@@ -27,10 +27,13 @@
 		- Standalone (extracted from the main repo for convenience)
 			- https://github.com/logos-storage/libp2p-mix-ping-example
 - Transport over MIX
+	- Giuliano's notes about TCP protocol: https://hackmd.io/usDygqXNT2WDNNsT7FYKdg
 	- Transport layer over Mix - draft spec: https://hackmd.io/CykSpMIrRP6XA2byDiWurg
 		- Transport layer abstraction over Mix (initial notes from Balazs): https://hackmd.io/-6VNSq4iSpSQGu3xdJ6rOA
 	- Reference implementation in Haskell (from Balazs)
 		- https://github.com/logos-storage/transport-over-mix
+	- Mix simulator ([**mghazwi**](https://github.com/mghazwi), Haskell)
+		- https://github.com/logos-storage/hs-mix-sim
 	- Nim implementation (placeholder):
 		- https://github.com/logos-storage/libp2p-storage-mix-transport
 		- includes some documents mirrored from Obsidian:
