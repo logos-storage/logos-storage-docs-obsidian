@@ -8,6 +8,7 @@ related:
   - "[[Mix Transport SURB Replenishment Strategy]]"
   - "[[Mix Transport Implementation Walk Through - Session Lifecycle Events]]"
   - "[[Mix Transport Block Exchange Integration - Session Events]]"
+  - "[[Mix Transport Logos Storage Integration Example]]"
 ---
 
 # Mix Transport Design Specification

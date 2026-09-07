@@ -2,12 +2,15 @@
 related:
   - "[[Mix Transport Design Specification]]"
   - "[[Mix Transport Implementation Walk Through - Session Lifecycle Events]]"
+  - "[[Mix Transport Logos Storage Integration Example]]"
   - "[[Libp2p Connection Lifecycle in Logos Storage]]"
   - "[[Block Exchange Peer Stores]]"
   - "[[New Logos Storage Block Exchange Protocol]]"
 ---
 
 # Mix Transport Block Exchange Integration - Session Events
+
+The concrete reference implementation, including Storage startup, BlockExchange dialing, manifest fetching, shutdown and the remaining recipient-side reset limitation, is documented in [[Mix Transport Logos Storage Integration Example]]. This note explains the lifecycle design that led to that implementation.
 
 ## Integration goal
 

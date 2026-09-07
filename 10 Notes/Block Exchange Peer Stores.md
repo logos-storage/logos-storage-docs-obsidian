@@ -11,6 +11,7 @@ related:
   - "[[Block Exchange Peer Performance and BDP]]"
   - "[[Libp2p Connection Lifecycle in Logos Storage]]"
   - "[[New Logos Storage Discovery]]"
+  - "[[Mix Discovery through Provider Records]]"
 ---
 # Block Exchange Peer Stores
 
@@ -191,6 +192,34 @@ last-seen time, failure count, and timeout count for that one download.
 | `ActiveDownload.ctx.swarm.peers` | One download and peer | Availability, staleness, failures, timeouts |
 
 Removing a `SwarmPeer` often leaves both node-wide entries intact.
+
+## Per-download swarm admission is currently too broad
+
+The node-wide `BlockExcEngine.peers` store answers the question “Which peers currently have a block-exchange peer context?” The per-download `Swarm` should answer the narrower question “Which peers are candidates for this particular manifest and its block tree?” The current download startup path does not preserve that distinction.
+
+When `downloadWorker` starts, the worker copies peers from the node-wide store, randomly truncates the sequence to the per-download `deltaMax`, and sends the initial `WantHave` window to the selected peers:
+
+```nim
+var connectedPeers = self.peers.toSeq()
+if connectedPeers.len > maxSwarmPeers:
+  shuffle(connectedPeers)
+  connectedPeers.setLen(maxSwarmPeers)
+
+await self.broadcastWantHave(download, windowStart, windowCount, connectedPeers)
+```
+
+`broadcastWantHave` then calls `download.addPeerIfAbsent` before sending each request. A peer admitted through this path is initially only an unverified candidate: the node knows that the peer is connected, but does not yet know that the peer provides the requested manifest or any block in the requested window.
+
+This broad admission can fill the bounded per-download swarm with unrelated peers before a provider discovered specifically for the manifest CID is admitted. Random selection limits the number of probes, but random selection does not prioritize peers with evidence that they provide the requested content. Provider records returned for the manifest CID should therefore be the preferred source of per-download candidates. Arbitrary connected peers can remain a fallback probe source when discovery has not supplied enough candidates.
+
+There is also a concrete consistency problem in `ActiveDownload.addPeerIfAbsent`:
+
+```nim
+discard download.ctx.swarm.addPeer(peerId, availability)
+return true
+```
+
+`Swarm.addPeer` returns `false` when the peer was previously removed from the download or when the swarm has reached `deltaMax`. `ActiveDownload.addPeerIfAbsent` discards that result and reports `true`, so the caller can send `WantHave` to a peer that was not actually inserted into the download's swarm. The eventual presence response may still fail to add the peer for the same capacity reason. `ActiveDownload.addPeerIfAbsent` should return the result of `Swarm.addPeer`, and later admission work should define how a newly discovered provider can replace a lower-value unverified candidate when the swarm is full.
 
 ## Normal insertion path
 
