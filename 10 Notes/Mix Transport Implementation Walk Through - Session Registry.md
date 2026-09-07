@@ -68,22 +68,21 @@ TransportSession* = ref object
   surbSupplyLimit: SurbSupplySequence
   replyCapacityStateChanged: AsyncEvent
   replySendLock: AsyncLock
-  nextRefillRequestAt: Opt[Moment]
   remoteSurbSupplyReceiveBase: SurbSupplySequence
   remoteSurbSupplyLimit: SurbSupplySequence
   nextSurbSupplySequence: Opt[SurbSupplySequence]
   pendingSurbSupply: Table[SurbSupplySequence, PendingSurbSupply]
-  surbSupplyRequested: bool
   surbSupplyStateChanged: AsyncEvent
   surbSupplierTask: Future[void].Raising([CancelledError])
   nextSurbStatusProbeAt: Opt[Moment]
+  unansweredSurbStatusProbes: int
   streams: Table[StreamId, TransportStream]
   nextOutboundStreamId: Opt[StreamId]
 ```
 
-The `established` event is how `connect` waits for `ConnectAck` without polling. The recipient-side fields store a bounded queue of public SURBs, a receive base and bitmap that suppress duplicate numbered supply, and an absolute supply limit that grants replacement credit when the recipient consumes a SURB. `nextRefillRequestAt` prevents the recipient from spending another reserved redundancy batch before the preceding urgent request has had time to produce useful supply.
+The `established` event is how `connect` waits for `ConnectAck` without polling. The recipient-side fields store a bounded queue of public SURBs, a receive base and bitmap that suppress duplicate numbered supply, and an absolute supply limit that grants replacement credit when the recipient consumes a SURB.
 
-The initiator-side fields record the recipient's latest supply snapshot, the next unused supply sequence, retained public serializations awaiting acknowledgement and the task that creates or retransmits supply. `surbSupplyRequested` is the boolean urgency condition set by `RefillRequest`; repeated requests do not create correlated request objects. The stream table routes a frame carrying `streamId` after the session has first been selected by `sessionId`.
+The initiator-side fields record the recipient's latest supply snapshot, the next unused supply sequence, retained public serializations awaiting acknowledgement and the task that creates or retransmits supply. `nextSurbStatusProbeAt` and `unansweredSurbStatusProbes` bound the time for which the initiator keeps a session that produces no valid reverse response. The stream table routes a frame carrying `streamId` after the session has first been selected by `sessionId`.
 
 ## How Sessions Are Found
 
@@ -142,7 +141,6 @@ let session = TransportSession(
   surbSupplyAcknowledgementBitmap: newSeq[byte](SurbSupplyAckBitmapBytes),
   replyCapacityStateChanged: newAsyncEvent(),
   replySendLock: newAsyncLock(),
-  nextRefillRequestAt: Opt.none(Moment),
   nextSurbSupplySequence: Opt.some(SurbSupplySequence(0)),
   pendingSurbSupply: initTable[SurbSupplySequence, PendingSurbSupply](),
   surbSupplyStateChanged: newAsyncEvent(),

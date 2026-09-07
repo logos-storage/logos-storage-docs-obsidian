@@ -33,37 +33,34 @@ defer:
 
 The `defer` gives the pending stream transactional lifetime. Every error path removes it unless the complete round trip reaches the final `keepStream = true`.
 
-The initiator creates two independent reply SURBs. It stores the corresponding private reply credentials locally under the session ID and serializes only the public SURBs into the `OpenStream` frame:
+The initiator always creates two independent response SURBs and then uses any remaining frame space for numbered session supply that fits within the recipient's latest advertised credit. It stores every corresponding private reply credential locally under the session ID and serializes only the public SURBs into `OpenStream`:
 
 ```text
 OpenStream
   sessionId = existing session pseudonym
   streamId  = newly allocated stream ID
   codec     = requested application protocol
-  surbs      = dedicated StreamAck or StreamReject return paths
+  surbs      = two response paths followed by optional numbered supply
 ```
 
-`OpenStream` is a control frame, so attaching SURBs does not change Data chunk sizing. These two SURBs are dedicated to the response for this opening attempt. The recipient decodes them into a temporary redundancy batch and sends `StreamAck` or `StreamReject` through that batch without inserting the SURBs into the session queue. Numbered `SurbSupply` remains the only post-establishment mechanism that increases ordinary session return capacity.
+The first two SURBs are dedicated to the response for this opening attempt. The recipient sends `StreamAck` or `StreamReject` through that temporary redundancy batch without inserting those two SURBs into the session queue. Any later SURBs in the frame have consecutive supply sequence numbers and enter the same bounded queue as SURBs carried by standalone `SurbSupply` frames.
 
 The public SURBs and their private credentials are produced together. Only the encoded public SURBs cross the Mix network:
 
 ```nim
+let suppliedCount = min(
+  MaxOpenStreamSurbs - DefaultReplySurbRedundancy,
+  session.availableSurbSupplySlots,
+)
 let prepared = self.createReplySurbs(
-  destination, session.sessionId, DefaultOpenStreamReplySurbs
+  destination,
+  session.sessionId,
+  DefaultReplySurbRedundancy + suppliedCount,
 ).valueOr:
   return err("could not prepare OpenStream reply SURBs: " & error)
-
-let frame = MixTransportFrame(
-  version: MixTransportVersion,
-  sessionId: session.sessionId,
-  kind: FrameKind.OpenStream,
-  streamId: Opt.some(stream.streamId),
-  codec: Opt.some(codec),
-  surbs: prepared.encoded,
-)
 ```
 
-`prepared.credentials` remain in the initiator's `ReplyCredentialStore`. They let `handleRawSurbReply` recover the `StreamAck` or `StreamReject` sent through these dedicated SURBs.
+`prepared.credentials` remain in the initiator's `ReplyCredentialStore`. The first two credentials let `handleRawSurbReply` recover `StreamAck` or `StreamReject`. Credentials for the numbered suffix remain active until the recipient uses those supplied SURBs, they expire or the session closes.
 
 After sending `OpenStream` through `MixProtocol.send`, `dial` waits on the outbound stream's resolution event. `StreamAck` establishes the stream, while `StreamReject` rejects it and lets `dial` return an error without waiting for `streamOpenTimeout`. The timeout remains necessary when no response arrives.
 
@@ -98,7 +95,7 @@ If the operation fails before `OpenStream` is submitted to Mix, `dial` removes t
 
 ## Recipient: Registering the Inbound Stream
 
-The destination receives `OpenStream` through the Mix delivery handler registered for `MixTransportCodec`. The handler first verifies that the frame refers to an established recipient-side session. The handler then attempts to deserialize every attached SURB. If at least two values are valid, the handler moves the first two valid SURBs into a local `replyBatch`; it does not add any of the attached SURBs to `TransportSession.receivedSurbs`.
+The destination receives `OpenStream` through the Mix delivery handler registered for `MixTransportCodec`. The handler first verifies that the frame refers to an established recipient-side session. It then deserializes the first two SURBs into the response batch. Both response SURBs must be valid because the recipient needs that complete batch to acknowledge or reject the opening attempt. Any SURBs after the first two form an independently decoded numbered-supply suffix.
 
 ```nim
 let session = self.sessions.get(frame.sessionId).valueOr:
@@ -107,20 +104,24 @@ if session.role != SessionRole.Recipient or
     session.state != SessionState.Established:
   return
 
-var decodedSurbs = newSeqOfCap[SURB](frame.surbs.len)
-for encodedSurb in frame.surbs:
-  let surb = encodedSurb.deserializeSurb().valueOr:
-    continue
-  decodedSurbs.add(surb)
-if decodedSurbs.len < DefaultReplySurbRedundancy:
-  return
-
 var replyBatch = newSeqOfCap[SURB](DefaultReplySurbRedundancy)
 for index in 0 ..< DefaultReplySurbRedundancy:
-  replyBatch.add(move(decodedSurbs[index]))
+  let surb = frame.surbs[index].deserializeSurb().valueOr:
+    return
+  replyBatch.add(surb)
+
+if frame.surbs.len > DefaultReplySurbRedundancy:
+  let firstSequence = frame.firstSurbSequence.get()
+  for index in DefaultReplySurbRedundancy ..< frame.surbs.len:
+    let surb = frame.surbs[index].deserializeSurb().valueOr:
+      continue
+    let sequence =
+      firstSequence +
+      SurbSupplySequence(index - DefaultReplySurbRedundancy)
+    discard session.acceptSurbSupply(sequence, surb)
 ```
 
-The recipient prepares the response paths before inspecting the requested codec because every rejection also needs an anonymous return path. If fewer than two attached values decode successfully, the recipient cannot acknowledge or reject the opening attempt and drops the frame without creating a stream.
+The recipient prepares the response paths and accepts valid numbered supply before inspecting the requested codec because every rejection also needs an anonymous return path, while the supplied queue entries remain useful to the established session even when this stream is rejected. If either of the first two attached values is invalid, the recipient cannot acknowledge or reject the opening attempt and drops the frame without creating a stream.
 
 The recipient uses the Switch's multistream registry to find a mounted protocol matching the requested codec. If no protocol matches, it does not register an inbound stream. Instead, it sends `StreamReject` through the `replyBatch` supplied by `OpenStream`. The frame includes the recipient's diagnostic reason, `requested protocol is not supported`, allowing the initiator to return that specific error as soon as the first valid redundant rejection arrives.
 
@@ -158,7 +159,7 @@ The recipient sends the same encoded `StreamAck` through both one-shot SURBs in 
 
 Before submitting `StreamAck`, the recipient configures the stream's write callback, starts its Data-delivery, ACK and optional retransmission tasks, and marks the stream established. This ordering matters because the first redundant `StreamAck` can reach the initiator while the recipient is still submitting another copy. Once the initiator receives that first acknowledgement, it may immediately send Data. Establishing the recipient-side stream before the acknowledgement leaves ensures that such Data enters the configured receive path instead of being discarded as traffic for a pending stream.
 
-After at least one `StreamAck` copy has been submitted successfully, the recipient retains the stream and its libp2p incoming-stream reservation. The recipient then starts the mounted protocol handler as a task owned by the stream and requests a refill if the session queue is low. The handler receives the same `TransportStream` and may use normal connection reads and writes without blocking `handleOpenStream`.
+After at least one `StreamAck` copy has been submitted successfully, the recipient retains the stream and its libp2p incoming-stream reservation. The recipient then starts the mounted protocol handler as a task owned by the stream. The handler receives the same `TransportStream` and may use normal connection reads and writes without blocking `handleOpenStream`.
 
 ```nim
 self.configureStream(session, stream)
@@ -173,7 +174,6 @@ keepReservation = true
 let handlerTask = runProtocolHandler(session, stream, protocol)
 if not handlerTask.finished:
   stream.setHandlerTask(handlerTask)
-discard await self.requestRefill(session)
 ```
 
 The protocol handler starts only after `sendStreamResponse` reports that at least one acknowledgement copy was submitted. A long-running handler read loop runs as the stream's `handlerTask`; it does not block the Mix delivery handler from processing later frames. Keeping the task on `TransportStream` also gives stream shutdown a direct task to cancel and await. A handler is recorded only while its future remains unfinished because an asynchronous Nim procedure can complete synchronously when none of its awaited futures suspend. In that case `runProtocolHandler` has already performed its deferred cleanup and no task remains for the stream to own.

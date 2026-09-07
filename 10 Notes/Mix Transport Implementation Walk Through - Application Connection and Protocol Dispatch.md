@@ -50,8 +50,6 @@ After at least one `StreamAck` copy has been submitted successfully, the recipie
 
 The `handlerTask.finished` check handles synchronous completion rather than concurrent pre-emption. A Nim asynchronous procedure begins executing when called and can return an already-finished future when none of its awaited futures suspend. In that case `runProtocolHandler` has already performed its deferred cleanup and `TransportStream` must not retain the completed future as an active handler task.
 
-After starting the application handler, `handleOpenStream` calls `requestRefill`. This call checks the recipient's current SURB queue and sends an urgent `RefillRequest` only when the queue is below its protected level and the refill retry deadline permits another request. With proactive replenishment enabled, the initiator's supplier normally restores the queue without waiting for this request; the request remains the pull part of the hybrid strategy.
-
 The relevant sequence in `handleOpenStream` is:
 
 ```nim
@@ -67,7 +65,6 @@ keepReservation = true
 let handlerTask = runProtocolHandler(session, stream, protocol)
 if not handlerTask.finished:
   stream.setHandlerTask(handlerTask)
-discard await self.requestRefill(session)
 ```
 
 If every acknowledgement copy fails, the existing deferred cleanup removes and closes the stream and releases the incoming protocol reservation. Cancellation follows the same cleanup path because it explicitly terminates the local stream-opening operation, regardless of whether an earlier copy escaped. If submission completes with at least one successful copy, the stream remains established and `runProtocolHandler` owns its eventual cleanup.

@@ -6,6 +6,8 @@ related:
   - "[[Mix Transport - Pluggable Integration Model]]"
   - "[[Mix Transport Implementation Walk Through]]"
   - "[[Mix Transport SURB Replenishment Strategy]]"
+  - "[[Mix Transport Implementation Walk Through - Session Lifecycle Events]]"
+  - "[[Mix Transport Block Exchange Integration - Session Events]]"
 ---
 
 # Mix Transport Design Specification
@@ -39,7 +41,7 @@ The transport uses exit-equals-destination routing. The final Mix node is the ap
 - receive windows, acknowledgements and sender backpressure;
 - private reply credentials at the original sender;
 - the public received-SURB queue at the recipient;
-- temporary send-time redundancy batches, hybrid SURB replenishment and return-send serialization;
+- temporary send-time redundancy batches, push-based SURB replenishment and return-send serialization;
 - retransmission, timeouts, close and resource limits.
 
 Mix remains usable without MixTransport. Another upper layer may use the stateless Mix service and SURB primitives to implement a different protocol. The embedded Mix connection behavior can coexist as a fallback while the plug-in architecture is introduced.
@@ -115,19 +117,20 @@ The currently active frames are:
 | --- | --- |
 | `Connect` | Initiator to recipient; creates the session and supplies initial public SURBs |
 | `ConnectAck` | Recipient to initiator through SURBs; confirms the session round trip |
-| `OpenStream` | Stream opener to remote endpoint; selects stream ID and application codec and supplies dedicated response SURBs |
+| `OpenStream` | Stream opener to remote endpoint; selects stream ID and application codec, supplies two dedicated SURBs for `StreamAck` or `StreamReject`, and uses remaining guaranteed capacity for numbered session supply |
 | `StreamAck` | Remote endpoint to opener; confirms registration and protocol admission |
 | `StreamReject` | Remote endpoint to opener; rejects the stream with an optional bounded reason |
 | `Data` | Either logical direction; carries one sequenced chunk |
 | `Ack` | Either logical direction; reports an absolute receive-base and bitmap snapshot |
-| `RefillRequest` | Recipient to initiator through reserved SURBs; reports absolute supply state and marks replenishment as urgent |
 | `SurbSupply` | Initiator to recipient through the forward path; carries consecutively numbered individual public SURBs |
 | `SurbStatusProbe` | Initiator to recipient through the forward path; carries dedicated SURBs for a status response |
 | `SurbStatus` | Recipient to initiator through the probe SURBs; reports absolute supply state when the ordinary queue can be empty |
+| `CloseStream` | Either logical direction; declares the sender's final Data sequence and closes the stream after all preceding Data has entered the remote ordered buffer |
+| `ResetStream` | Either logical direction; aborts one stream immediately |
+| `Disconnect` | Either logical direction; gracefully removes an idle session after its streams have closed |
+| `ResetSession` | Either logical direction; aborts the complete session and all remaining streams |
 
-`Refill`, `CloseStream`, `ResetStream`, `Disconnect` and `ResetSession` have reserved wire values but are not implemented end to end. `Refill` belongs to the superseded request/response replenishment protocol; current replenishment uses numbered `SurbSupply` frames.
-
-Data frames never carry SURBs. `Connect` supplies unnumbered bootstrap paths for session establishment, while `OpenStream` and `SurbStatusProbe` carry unnumbered paths dedicated to their immediate responses. Only numbered `SurbSupply` frames add post-establishment SURBs to the recipient's session queue.
+Data frames never carry SURBs. `Connect` and `OpenStream` reserve their first two SURBs for the direct handshake response and use the remaining guaranteed frame capacity for numbered supply to the recipient's bounded session queue. `Connect` currently holds five SURBs in total, while an `OpenStream` with the maximum legal codec length holds four. A dedicated `SurbSupply` frame continues the same numbered sequence and holds five SURBs. `SurbStatusProbe` carries two unnumbered SURBs that are used immediately for `SurbStatus` and never enter the session queue.
 
 ## Data Chunking and Outbound Bounds
 
@@ -169,29 +172,33 @@ Forward frames from the session initiator use `MixProtocol.send` with the real d
 
 Individual SURBs are shared by all streams in a session. A per-session send lock ensures that concurrent reverse Data, ACK and control operations cannot remove the same SURB. The recipient keeps the queue within a configured capacity, while the initiator keeps each corresponding private reply credential until that SURB is used, expires or the session closes. The redundancy batch has no wire representation and does not persist after its reverse frame has been submitted.
 
-The implemented replenishment mechanism combines proactive initiator supply with recipient requests. The recipient advertises an absolute `surbSupplyLimit`, which authorizes the initiator to introduce only a bounded number of uniquely numbered SURBs. The initiator retains each serialized public SURB until the recipient acknowledges it and retransmits that same numbered SURB after loss; retransmission never creates another credential for an existing supply sequence. Before retransmission, the initiator purges expired credential-store entries, verifies that the original private credential remains active and discards the public serialization when that credential is absent. The recipient uses a receive base and fixed bitmap to accept out-of-order supply, suppress duplicates and report which public serializations the initiator may stop retaining.
+The initiator is solely responsible for replenishment. The recipient advertises an absolute `surbSupplyLimit`, which authorizes the initiator to introduce only a bounded number of uniquely numbered SURBs. The initiator uses the reported capacity and its allocated sequence state to estimate how many SURBs the recipient has or will have after in-flight supply arrives. A reverse frame that frees only one redundancy batch updates this estimate without causing an immediate replacement packet. When the projected inventory reaches the configurable low watermark, the initiator starts a replenishment cycle and allocates supply until the projection returns to capacity. The recipient does not send a separate refill request. The initiator retains each serialized public SURB until the recipient acknowledges it and retransmits that same numbered SURB after loss. Retransmission never creates another credential for an existing supply sequence. Before retransmission, the initiator purges expired credential-store entries, verifies that the original private credential remains active and discards the public serialization when that credential is absent. The recipient uses a receive base and fixed bitmap to accept out-of-order supply, suppress duplicates and report which public serializations the initiator may stop retaining.
 
-Reverse transport frames that participate in the supply protocol carry the recipient's complete supply acknowledgement and credit snapshot. A recipient-side refill request remains available as an urgent signal when the local supply is low. If the recipient's session queue is empty and reverse status cannot be sent, the initiator sends a forward status probe containing enough fresh SURBs for one dedicated redundancy batch. The recipient uses those SURBs immediately to return its current supply state instead of storing them in the session queue. This exchange restores synchronization without requiring the recipient to have stored SURBs available beforehand.
+Every ordinary reverse transport frame carries the recipient's complete supply acknowledgement and credit snapshot. Removing SURBs for that reverse frame increases the advertised limit, so the same frame tells the initiator how many replacements it may send. If fewer than two SURBs are available, the reverse send waits for numbered supply rather than consuming a protected control reserve.
 
-`newMixTransport` enables proactive replenishment by default and accepts `enableProactiveSurbReplenishment = false` for pull-only operation. Both policies use the same supplier task, numbered supply frames, absolute credit and retransmission state. In pull-only operation the supplier waits for `RefillRequest`; without proactive status probes, complete exhaustion of the recipient's return paths remains terminal. [[Mix Transport SURB Replenishment Strategy]] defines the mechanism and its safety bounds, while [[Mix Transport Implementation Walk Through - SURB Replenishment]] maps the design to the implementation.
+Ordinary reverse activity can be lost together with the latest supply snapshot. The initiator therefore maintains a reverse-activity deadline for each established session. When the deadline expires, the initiator sends a forward `SurbStatusProbe` containing two fresh, dedicated response SURBs. The recipient uses those SURBs immediately to return its current absolute state, even when its session queue is empty. The initiator retries the probe after a configurable interval. If the configured number of attempts produces no valid reverse response, the initiator closes only that session and releases its credentials and streams. [[Mix Transport SURB Replenishment Strategy]] defines the mechanism and its safety bounds, while [[Mix Transport Implementation Walk Through - SURB Replenishment]] maps the design to the implementation.
 
 ## Task and Resource Lifetime
 
 Task ownership follows the transport hierarchy. `MixTransport` owns its sessions. Each `TransportSession` owns its SURB supplier task and registered streams. Each `TransportStream` owns its ordered-delivery, ACK and Data-retransmission tasks and, for an accepted inbound application stream, the protocol-handler invocation and incoming protocol reservation.
 
-Closing a `TransportStream` wakes Data, ACK, capacity and stream-opening waiters and explicitly requests cancellation of its handler and internal tasks. The explicit cancellation also reaches a task that is no longer waiting on a stream event because it is suspended inside Mix delivery or SURB replenishment. `closeImpl` does not wait for task completion because the protocol handler may be the task currently completing stream cleanup. External stream shutdown waits for every owned task; natural protocol-handler completion clears its handler-task reference, closes the stream, waits for the remaining internal tasks, releases its incoming reservation and removes the stream from its session. Closing a session similarly wakes a pending `connect`; the caller then observes the closed session instead of waiting until the connection timeout.
+Closing a `TransportStream` wakes Data, ACK, capacity and stream-opening waiters and explicitly requests cancellation of its handler and internal tasks. The explicit cancellation also reaches a task that is no longer waiting on a stream event because it is suspended inside Mix delivery or SURB replenishment. A locally initiated close invokes a transport callback after closing the local `BufferStream`; the callback attempts the remote notification, waits for the internal stream tasks and removes the stream from its session. Natural protocol-handler completion clears its handler-task reference before closing, so the handler never waits for its own future. External session shutdown detaches the streams and waits for complete stream shutdown. Closing a session also wakes a pending `connect`; the caller then observes the closed session instead of waiting until the connection timeout.
 
-Complete shutdown proceeds through the same hierarchy. After unregistering Mix handlers, the transport synchronously detaches all sessions through `takeSessions`. Each session synchronously detaches its streams through `takeStreams`, starts their shutdown operations and waits for them. The transport clears reply credentials only after all detached sessions and streams have completed local teardown.
+Complete shutdown proceeds through the same hierarchy. The transport synchronously detaches all sessions through `takeSessions` and makes one best-effort `ResetSession` submission for each detached session while the Mix handlers remain registered. It then unregisters the handlers. Each session synchronously detaches its streams through `takeStreams`, starts their shutdown operations and waits for them. Session shutdown suppresses redundant per-stream notifications because `ResetSession` already describes the complete subtree. The transport clears reply credentials only after all detached sessions and streams have completed local teardown.
 
 Reply credential capacity rejects new credentials rather than evicting unrelated in-flight credentials. Successful recovery consumes only the credential selected by the reply's SURB identifier. Cryptographic recovery failure preserves that credential for another packet carrying the same identifier, while successful cryptographic recovery followed by invalid transport decoding consumes the matching credential because the recovered reply cannot enter the transport state machine. Other credentials remain independent, including credentials for redundant copies of the same logical frame.
 
-Runtime close, reset and complete peer-drop behavior still require the corresponding remote wire exchanges and explicit session resource reclamation. Once a session or stream has been established, an endpoint that closes it normally should make a best-effort attempt to send `CloseStream` or `Disconnect` before removing its local state. Cancellation and failure should similarly use `ResetStream` or `ResetSession` when a return path is still available. These notifications allow the remote endpoint, including an initiator waiting for further traffic, to release its state immediately instead of discovering the closure only through a timeout. Sending a notification must not delay cancellation or make local cleanup depend on successful Mix delivery; if notification is no longer possible, teardown proceeds locally.
+Normal stream closure sends `CloseStream` with the sender's final Data sequence. Because Mix can reorder packets, the receiver records that boundary and closes only after its ordered receive path has advanced beyond it. `ResetStream` aborts immediately. A remote reset is recorded before closing `BufferStream`, and the `TransportStream.readOnce` override converts the resulting wake-up into `LPStreamResetError`. The higher-level libp2p operations `readExactly`, `readLine` and `readLp` all build on `readOnce`, so they preserve the same distinction between reset and graceful EOF.
+
+The public `disconnect(session)` operation requires the session to have no active streams. A received `Disconnect` is retained when stream-close notifications are still in flight and completes after the final stream has gone. `resetSession` and transport shutdown use `ResetSession` to abort all remaining stream state. Notifications remain best effort and local teardown continues if no delivery path is available. [[Mix Transport Implementation Walk Through - Remote Teardown]] maps these rules to the implementation and tests.
 
 ## Logos Storage Integration
 
 Logos Storage will inject `MixTransport` into the network path used by block exchange. When Mix is enabled, peer establishment and stream dialing must go through the transport rather than calling `switch.connect` for the anonymous application peer.
 
 The recipient-side block-exchange handler receives a normal `Connection` whose `peerId` is the session pseudonym. Transport session events, rather than raw Switch JOINED events from relay connections, must determine which anonymous application peers enter or leave the block-exchange peer set. A physical relay may also be a Storage node, but its direct Mix-overlay connection is not evidence that it opened an anonymous block-exchange session.
+
+MixTransport publishes `Established` and `Closed` once for each successfully established session. On the initiator, the event peer ID is the real destination; on the recipient, the event peer ID is the anonymous session pseudonym. Closing an individual virtual stream does not publish a session event. [[Mix Transport Implementation Walk Through - Session Lifecycle Events]] defines the event contract, and [[Mix Transport Block Exchange Integration - Session Events]] describes how BlockExchange should replace raw Switch peer membership while preserving its existing joined and departed handlers.
 
 The existing exploratory `storage/mix/` code can inform initialization and dependency injection, but the generic package interface is the source of truth. Storage integration may replace that exploratory code where it does not match this design.
 
@@ -209,22 +216,24 @@ Implemented and covered by focused or live tests:
 - payload-aware chunking and bidirectional Data transfer;
 - bounded sender state, fixed receive window, ordered delivery, absolute bitmap ACKs and optional Data retransmission enabled by default;
 - application backpressure through `BufferStream`;
-- individual recipient SURB storage, a control reserve and serialized redundant return sends;
+- individual recipient SURB storage, waiting reverse sends and serialized redundant return sends;
 - bounded absolute supply credit, numbered individual supply, out-of-order receipt and duplicate suppression;
-- proactive supply enabled by default, recipient refill requests and optional pull-only operation;
-- retained public SURB retransmission and terminal starvation recovery through status probes;
-- cancellation-safe local handler and flow-task shutdown;
-- a five-node live request/response exchange through the standard connection API.
+- initiator-driven supply based on absolute recipient credit;
+- retained public SURB retransmission and bounded starvation recovery through status probes;
+- cancellation-safe local handler and stream-task shutdown;
+- graceful stream close, immediate stream reset, graceful idle-session disconnect and complete session reset;
+- idempotent session establishment and closure events with endpoint-appropriate peer identity;
+- a five-node live request/response and graceful teardown exchange through the standard connection API.
 
 Not yet implemented:
 
 - Data retransmission retry limits and RTT/RTO selection;
 - ACK send retry and optional delayed-ACK batching;
 - a persist probe when all receive-window updates are lost;
-- `CloseStream`, `ResetStream`, `Disconnect` and `ResetSession` processing;
-- runtime session limits and complete peer-drop cleanup;
+- teardown-frame retransmission and acknowledgement;
+- runtime session limits;
 - authenticated Mix service discovery and destination record lifecycle;
-- Logos Storage block-exchange integration and replacement peer events;
+- Logos Storage block-exchange integration using the transport session events;
 - removal of the embedded legacy path and final cleanup of forward mode.
 
 ## Migration Sequence
@@ -248,7 +257,7 @@ Not yet implemented:
 - Slow application reads stop the sender from introducing unbounded data.
 - Lost ACKs cause duplicate Data to be acknowledged again rather than delivered twice.
 - Retrying a return frame forms a fresh redundancy batch and never reuses a sent SURB.
-- Refill and persist mechanisms cannot permanently strand an otherwise live session after one lost control packet.
+- Supply retransmission and bounded status probes recover lost supply state or fail the affected session explicitly.
 - Timeouts, close, reset, cancellation and capacity failures reclaim all session-owned state on both endpoints.
 - Logos Storage block exchange reuses its normal frame reader and protocol handlers over the virtual connection.
 - The final Mix routing model uses exit equals destination and does not require application-specific read behavior in Mix core.

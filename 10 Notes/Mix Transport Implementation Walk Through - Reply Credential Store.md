@@ -25,7 +25,7 @@ Mix understands the cryptographic contents of the credential, but MixTransport o
 
 SURBs are supplied and stored individually. The recipient decides which `N` SURBs to combine only when sending a reverse frame. The initiator cannot know that temporary selection in advance, so the reply credential store does not represent redundancy batches.
 
-Recovering one redundant copy consumes only the credential matching that copy. Another copy can still arrive through a different SURB and be recovered with its own credential. The decoded transport frame then suppresses the repeated logical effect: Data has a stream sequence, ACK is an absolute snapshot, handshake responses act only on pending state, and `RefillRequest` carries absolute supply state.
+Recovering one redundant copy consumes only the credential matching that copy. Another copy can still arrive through a different SURB and be recovered with its own credential. The decoded transport frame then suppresses the repeated logical effect: Data has a stream sequence, ACK and SURB status are absolute snapshots, and handshake responses act only on pending state.
 
 This model may retain the credential for a lost redundant copy until expiry even after another copy succeeded. The TTL and credential capacity bound that cost. The advantage is that SURBs remain independent throughout supply and storage, and no persistent grouping has to be transmitted or reconstructed.
 
@@ -113,7 +113,7 @@ StoredReplyCredential(
 )
 ```
 
-Credentials registered by the same call currently receive the same deadline because `add` uses one `now` value, but the store does not rely on that equality. Later proactive supply operations can register additional credentials for the same session at different times.
+Credentials registered by the same call currently receive the same deadline because `add` uses one `now` value, but the store does not rely on that equality. Later supply operations can register additional credentials for the same session at different times.
 
 `get` checks the selected credential's deadline directly. Once the deadline is reached, the credential is no longer returned even if a cleanup sweep has not physically removed its table entry. An expired reply therefore cannot be accepted merely because the process has been idle and no sweep has run.
 

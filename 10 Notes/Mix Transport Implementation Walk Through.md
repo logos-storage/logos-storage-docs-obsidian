@@ -12,4 +12,7 @@ related:
 - [[Mix Transport Implementation Walk Through - Application Connection and Protocol Dispatch]]
 - [[Mix Transport Implementation Walk Through - Bounded Data Flow]]
 - [[Mix Transport Implementation Walk Through - SURB Replenishment]]
+- [[Mix Transport Implementation Walk Through - Remote Teardown]]
+- [[Mix Transport Implementation Walk Through - Session Lifecycle Events]]
 - [[Mix Transport SURB Replenishment Strategy]]
+- [[Mix Transport Block Exchange Integration - Session Events]]

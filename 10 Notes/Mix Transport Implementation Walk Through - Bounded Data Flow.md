@@ -7,16 +7,16 @@ related:
   - "[[Mix Transport SURB Replenishment Strategy]]"
   - "[[Mix Transport Implementation Walk Through - SURB Replenishment]]"
 ---
-This walkthrough follows application bytes through an established `TransportStream`. The forward path begins when the session initiator writes to the stream, divides the byte sequence into Sphinx-sized transport frames and sends those frames to the session recipient. The recipient restores the ordered byte stream, exposes the bytes to the mounted libp2p protocol and acknowledges the received sequences. The walkthrough then follows the reverse path, where the recipient forms a temporary redundancy batch from individual SURBs supplied by the initiator and sends the same Data or ACK frame through every SURB in that batch. Because every reverse frame consumes a fixed number of one-shot SURBs, the recipient must replenish its supply before it loses its final return path.
+This walkthrough follows application bytes through an established `TransportStream`. The forward path begins when the session initiator writes to the stream, divides the byte sequence into Sphinx-sized transport frames and sends those frames to the session recipient. The recipient restores the ordered byte stream, exposes the bytes to the mounted libp2p protocol and acknowledges the received sequences. The walkthrough then follows the reverse path, where the recipient forms a temporary redundancy batch from individual SURBs supplied by the initiator and sends the same Data or ACK frame through every SURB in that batch. If the recipient does not have enough SURBs for that batch, the reverse send waits while the initiator-driven supply mechanism restores the queue.
 
 The implementation is divided across four modules:
 
 - `wire.nim` defines `Data`, `Ack` and the SURB supply snapshot carried by reverse frames. The module also defines the fixed-width stream and sequence types, derives one maximum Data payload size and validates both fixed-size acknowledgement bitmaps.
 - `streams.nim` owns sequence numbers, retained outbound chunks, the receive window, its bitmap and the events used by the flow tasks.
-- `sessions.nim` owns the recipient's bounded queue of individual SURBs, numbered supply state, refill timing and the lock that serializes return sends within one session.
+- `sessions.nim` owns the recipient's bounded queue of individual SURBs, numbered supply state, liveness-probe timing and the lock that serializes return sends within one session.
 - `transport.nim` connects the standard libp2p `Connection` methods to those state machines. The module selects forward Mix delivery for frames sent by the session initiator and SURB delivery for frames sent by the session recipient.
 
-The current implementation bounds memory, propagates application backpressure, retransmits unacknowledged Data and replenishes recipient SURBs through a hybrid proactive and request-driven mechanism. Data retransmission and proactive SURB replenishment are enabled by default and can be disabled independently when constructing `MixTransport`. The transport does not yet probe a stalled Data receive window when every ACK carrying the advanced window has been lost.
+The current implementation bounds memory, propagates application backpressure, retransmits unacknowledged Data and replenishes recipient SURBs through an initiator-driven push mechanism. Data retransmission is enabled by default and can be disabled when constructing `MixTransport`. SURB replenishment is always active. The transport does not yet probe a stalled Data receive window when every ACK carrying the advanced window has been lost.
 
 ## The State Behind One Virtual Connection
 
@@ -373,9 +373,9 @@ proc sendStreamFrame(
     await session.acquireReplySend()
     defer:
       session.releaseReplySend()
-    (await self.ensureUnreservedSurbs(session)).isOkOr:
+    (await session.waitForReplySurbs(DefaultReplySurbRedundancy)).isOkOr:
       return err(error)
-    var replyBatch = session.takeUnreservedSurbs(DefaultReplySurbRedundancy).valueOr:
+    var replyBatch = session.takeReceivedSurbs(DefaultReplySurbRedundancy).valueOr:
       return err(error)
     var replyFrame = frame
     session.attachSurbSupplySnapshot(replyFrame)
@@ -383,8 +383,6 @@ proc sendStreamFrame(
       return err("could not encode " & $frame.kind & " frame: " & error)
     (await self.sendWithSurbRedundancyBatch(replyBatch, payload)).isOkOr:
       return err("could not send " & $frame.kind & " frame: " & error)
-    (await self.requestRefill(session)).isOkOr:
-      return err(error)
   ok()
 ```
 
@@ -392,9 +390,9 @@ When the local endpoint is the session initiator, the initiator knows the destin
 
 When the local endpoint is the session recipient, the recipient does not have a forward destination for the anonymous initiator. The recipient removes `DefaultReplySurbRedundancy` individual SURBs from the session queue, treats those SURBs as a temporary redundancy batch, and submits the same encoded frame through every SURB in that batch. This path carries both response Data written by the recipient's application handler and ACKs produced after the recipient receives forward Data from the initiator.
 
-`acquireReplySend` serializes all return sends belonging to the same session. The session has one shared queue of individual SURBs, so an application response and an ACK task must not concurrently inspect and consume that queue. The recipient preserves enough individual SURBs for control traffic, waits until a complete temporary batch is available above that reserve, and checks whether another refill should be requested after consuming the selected SURBs. Removing SURBs increases the absolute supply limit; attaching the snapshot to the frame reports that replacement credit to the initiator.
+`acquireReplySend` serializes all return sends belonging to the same session. The session has one shared queue of individual SURBs, so an application response and an ACK task must not concurrently inspect and consume that queue. The recipient waits until one complete temporary redundancy batch is available and then removes that batch. Removing SURBs increases the absolute supply limit; attaching the snapshot to the same reverse frame reports that replacement credit to the initiator.
 
-The definition of unreserved SURBs and the hybrid replenishment mechanism are documented in [[Mix Transport SURB Replenishment Strategy]] and mapped to code in [[Mix Transport Implementation Walk Through - SURB Replenishment]]. This walkthrough relies on their resulting contract: one reverse transport frame consumes `DefaultReplySurbRedundancy` session-owned SURBs, and Data or ACK transmission waits rather than consuming SURBs protected for replenishment control.
+The initiator-driven replenishment mechanism is documented in [[Mix Transport SURB Replenishment Strategy]] and mapped to code in [[Mix Transport Implementation Walk Through - SURB Replenishment]]. This walkthrough relies on its resulting contract: one reverse transport frame consumes `DefaultReplySurbRedundancy` session-owned SURBs, and Data or ACK transmission waits when the queue cannot provide that complete batch.
 
 After the session recipient submits the same encoded frame through every SURB in the temporary batch, the explanation moves to the session initiator that receives those redundant replies. The initiator's reply credential store contains one private credential for each SURB. Each arriving reply is recovered independently and consumes only its matching credential. Multiple recovered replies may therefore contain the same logical Data or ACK frame. Data sequence numbers and absolute ACK state make those frames idempotent: the first copy changes stream state, while later copies are recognized as duplicates and cannot deliver application bytes or remove outbound chunks twice.
 
@@ -689,12 +687,12 @@ proc newMixTransport*(
     mix: MixProtocol,
     connectTimeout = DefaultConnectTimeout,
     streamOpenTimeout = DefaultStreamOpenTimeout,
-    refillRequestTimeout = DefaultRefillRequestTimeout,
     dataRetransmissionTimeout = DefaultDataRetransmissionTimeout,
     surbSupplyRetransmissionTimeout = DefaultSurbSupplyRetransmissionTimeout,
-    surbStatusProbeInterval = DefaultSurbStatusProbeInterval,
+    reverseActivityTimeout = DefaultReverseActivityTimeout,
+    surbStatusProbeRetryInterval = DefaultSurbStatusProbeRetryInterval,
+    maxSurbStatusProbeAttempts = DefaultMaxSurbStatusProbeAttempts,
     enableDataRetransmissions = true,
-    enableProactiveSurbReplenishment = true,
     recipientSurbCapacity = DefaultRecipientSurbCapacity,
 ): MixTransport
 ```
@@ -749,23 +747,27 @@ An established stream owns an ordered Data-delivery task and an ACK task. An acc
 
 Firing the events is sufficient when a task is idle at one of those waits, but it does not stop a task that has moved into another asynchronous operation. For example, `runAcknowledgements` may be inside `sendStreamFrame`, waiting for a session SURB refill. The ACK task is no longer waiting on `shouldSendAck`, so firing that event cannot terminate it. `TransportStream` therefore owns explicit references to its internal `streamTasks` and optional `handlerTask`.
 
-`TransportStream.closeImpl` fires the ordinary state events, requests cancellation of every owned task and then delegates to `BufferStream.closeImpl`:
+`TransportStream.closeImpl` delegates to `closeTransportStream`. That procedure fires the ordinary state events, requests cancellation of the internal stream tasks and closes `BufferStream` before invoking the callback that attempts a remote teardown notification:
 
 ```nim
-method closeImpl*(
-    stream: TransportStream
-): Future[void] {.async: (raises: [], raw: true).} =
+proc closeTransportStream(
+    stream: TransportStream, reset: bool
+): Future[void] {.async: (raises: []).} =
   stream.dataAvailable.fire()
   stream.shouldSendAck.fire()
   stream.sendStateChanged.fire()
+  stream.retransmissionStateChanged.fire()
   stream.resolved.fire()
   stream.streamTasks.cancelSoon()
+  await procCall BufferStream(stream).closeImpl()
+
+  if not stream.suppressRemoteTeardown and not stream.teardownHandler.isNil:
+    await stream.teardownHandler(reset, stream.finalOutboundSequence)
   if not stream.handlerTask.isNil:
     stream.handlerTask.cancelSoon()
-  procCall BufferStream(stream).closeImpl()
 ```
 
-The inherited `LPStream.close` operation marks the stream closed before dispatching to `closeImpl`. The fired events allow ordinary waiters to observe that state, while explicit cancellation reaches a task suspended deeper inside Mix or SURB processing. `closeImpl` requests cancellation but does not wait: the protocol handler may be the task currently completing stream cleanup, and a task must not wait for itself.
+The inherited `LPStream.close` operation marks the stream closed before dispatching to `closeImpl`. The fired events allow ordinary waiters to observe that state, while explicit cancellation reaches a task suspended deeper inside Mix or SURB processing. The locally installed teardown callback waits for `streamTasks` after attempting the notification. The protocol handler is cancelled after that callback; if the handler initiated the close while returning naturally, its cleanup clears `handlerTask` before the call and therefore does not cancel or wait for itself.
 
 External teardown uses `TransportStream.shutdown`. The procedure retains a local reference to `handlerTask`, closes the stream and then waits for the internal tasks and handler to finish. The local reference remains valid if handler cleanup clears the field while cancellation is being processed:
 
@@ -781,16 +783,24 @@ proc shutdown*(stream: TransportStream): Future[void] {.async: (raises: []).} =
 
 When `runProtocolHandler` finishes naturally, it clears `handlerTask` before closing the stream and waits only for the internal `streamTasks`. The handler therefore never waits for its own future.
 
-Stopping the complete transport follows the ownership hierarchy. After unregistering both Mix handlers, `takeSessions` synchronously detaches every session from the store. Each session synchronously detaches its streams through `takeStreams`; session shutdown then starts every stream shutdown and waits for all of them. No table iterator survives across an `await`, and a handler completing during cancellation cannot mutate the container currently being iterated. After all detached sessions finish, the transport clears reply credentials:
+Stopping the complete transport follows the ownership hierarchy. `takeSessions` synchronously detaches every session from the store. Before unregistering the Mix handlers, the transport makes one best-effort `ResetSession` submission for each detached session. Each session then synchronously detaches its streams through `takeStreams`; session shutdown starts every stream shutdown and waits for all of them. No table iterator survives across an `await`, and a handler completing during cancellation cannot mutate the container currently being iterated. After all detached sessions finish, the transport clears reply credentials:
 
 ```nim
 proc stop*(self: MixTransport): Future[void] {.async: (raises: [CancelledError]).} =
   if not self.started:
     return
 
+  let sessions = self.sessions.takeSessions()
+  for session in sessions:
+    let frame = MixTransportFrame(
+      version: MixTransportVersion,
+      sessionId: session.sessionId,
+      kind: FrameKind.ResetSession,
+    )
+    discard await self.sendTeardownFrame(session, frame)
+
   self.mix.unregisterRawSurbReplyHandler()
   self.mix.unregisterMixDeliveryHandler(MixTransportCodec)
-  let sessions = self.sessions.takeSessions()
   var shutdownTasks = newSeqOfCap[Future[void].Raising([])](sessions.len)
   for session in sessions:
     shutdownTasks.add(session.shutdown())
@@ -799,9 +809,7 @@ proc stop*(self: MixTransport): Future[void] {.async: (raises: [CancelledError])
   self.started = false
 ```
 
-`CloseStream`, `ResetStream`, `Disconnect` and `ResetSession` already have wire-format identifiers, but neither endpoint currently sends or handles those frames through the complete transport path. The implemented shutdown therefore cleans up local tasks and state; it does not yet notify the remote endpoint that a stream or session has ended.
-
-A future lifecycle increment should send a best-effort notification when an established stream or session is closed and a delivery path remains available. A normal close should use `CloseStream` or `Disconnect`; cancellation or failure should use `ResetStream` or `ResetSession`. The remote endpoint can then remove its corresponding state immediately rather than waiting for a traffic or liveness timeout. This notification is an optimization of remote cleanup, not a prerequisite for local teardown: cancellation must continue immediately, and local cleanup must complete even when the notification cannot be sent or is lost.
+Stream and session teardown now use `CloseStream`, `ResetStream`, `Disconnect` and `ResetSession`. Graceful stream closure carries a final Data sequence so an out-of-order close cannot discard preceding Data, while reset remains immediate. [[Mix Transport Implementation Walk Through - Remote Teardown]] explains the complete send, receive, task-cancellation and `readOnce` reset paths. This note retains the task-ownership context because those tasks implement bounded Data flow, but the teardown walk-through is the source for lifecycle behavior.
 
 ## The Tests as an Executable Walkthrough
 
@@ -861,7 +869,9 @@ if not await receivedResponseFuture.withTimeout(TestOperationTimeout):
 let receivedResponse = await receivedResponseFuture
 ```
 
-This exchange exercises both directions explicitly. Initiator Data travels through forward Mix delivery, and the recipient returns its ACK through a temporary batch of individual SURBs. Recipient Data travels through another temporary SURB batch, and the initiator returns its ACK through forward Mix delivery. The default-policy run waits for proactive numbered supply to fill the recipient's advertised capacity. A second run disables proactive supply; the recipient then sends `RefillRequest`, and that urgent signal causes the initiator's supplier task to restore enough return capacity for the same application request and response to complete. `TestOperationTimeout` is a failure guard for operations that never complete; successful synchronization comes from transport handshakes, queue notifications and stream reads rather than fixed sleeps.
+This exchange exercises both directions explicitly. Initiator Data travels through forward Mix delivery, and the recipient returns its ACK through a temporary batch of individual SURBs. Recipient Data travels through another temporary SURB batch, and the initiator returns its ACK through forward Mix delivery. Before the stream opens, the test waits for initiator-driven numbered supply to fill the recipient's advertised capacity. `TestOperationTimeout` is a failure guard for operations that never complete; successful synchronization comes from transport handshakes, queue notifications and stream reads rather than fixed sleeps.
+
+After the request and response have completed, the same live test closes the initiator stream and waits on the recipient stream's `join` future. It then calls `disconnect` and waits for the recipient session's `closedEvent`. The test therefore verifies that the bounded Data path hands control to graceful stream and session teardown without relying on fixture shutdown.
 
 ## Remaining Reliability Work
 
@@ -875,6 +885,6 @@ The implemented flow bounds memory and carries application bytes in both directi
 
 - Every accepted chunk, duplicate and `receiveBase` advancement currently wakes the ACK task immediately. A delayed-ACK policy could combine state changes that occur within a short interval and reduce Mix-packet and SURB consumption, but no delay timer or threshold policy is implemented.
 
-- `CloseStream`, `ResetStream`, `Disconnect` and `ResetSession` are represented in the wire enum but are not sent and handled by both endpoints. Consequently, local cancellation removes local state, while the remote endpoint learns about closure only through later failures or its own cleanup. A future lifecycle increment should send the applicable notification on a best-effort basis when a delivery path remains, without delaying cancellation or making local teardown depend on its delivery.
+- Teardown notifications are best effort and are not retransmitted or acknowledged. A lost `CloseStream`, `ResetStream`, `Disconnect` or `ResetSession` can therefore leave remote state alive until another liveness mechanism removes it.
 
 These additions affect transport scheduling and lifecycle management. They do not require changing the application-facing `Connection` API, and the retransmission and delayed-ACK work can continue to use the existing sequence numbers, `receiveBase` and fixed acknowledgement bitmap.
