@@ -266,7 +266,7 @@ tr_start_network 5 --mix-config=exponential
 For `multitransfer.bash`, the sixth positional argument selects the preset:
 
 ```bash
-tools/experiments/multitransfer/multitransfer.bash \
+bash tools/experiments/multitransfer/multitransfer.bash \
   20 50 5 1000000 true exponential none
 ```
 
@@ -469,7 +469,7 @@ The profile names are convenient labels, not claims that the values accurately r
 Run:
 
 ```bash
-tools/harness/emu-test.bash
+bash tools/harness/emu-test.bash
 ```
 
 The test configures a shared 0.5 Mbit/s rate limit and starts two one-shot `iperf3` servers:
@@ -484,7 +484,7 @@ The sanity test verifies traffic classification. The sanity test does not valida
 The main experiment keeps a requested number of transfers active until the requested total has completed:
 
 ```bash
-tools/experiments/multitransfer/multitransfer.bash \
+bash tools/experiments/multitransfer/multitransfer.bash \
   <node-count> \
   <total-transfers> \
   <concurrent-transfers> \
@@ -497,7 +497,7 @@ tools/experiments/multitransfer/multitransfer.bash \
 For example:
 
 ```bash
-tools/experiments/multitransfer/multitransfer.bash \
+bash tools/experiments/multitransfer/multitransfer.bash \
   20 50 5 1000000 true default wired-lossy
 ```
 
@@ -517,7 +517,16 @@ The defaults are:
 
 The scheduler starts transfers in background processes. When the concurrency limit is reached, `wait -n` waits until any transfer process exits. Bash does not return the completed process identifier in the form used by the script, so the scheduler checks every recorded PID with `kill -0` and removes processes that no longer exist.
 
-`multitransfer-set.bash` contains a `PARAMS` array for running several experiment configurations sequentially. Edit that array before launching a large sweep. The script refreshes the caller's `sudo` timestamp every 30 seconds so repeated namespace creation does not repeatedly prompt for a password.
+`multitransfer-set.bash` contains a `PARAMS` array for running several experiment configurations sequentially. Edit that array before launching a large sweep. The script refreshes the caller's `sudo` timestamp every 30 seconds so repeated namespace creation does not repeatedly prompt for a password. Every configuration receives a new run identifier and writes a separate measurement CSV and log directory.
+
+Run the complete configured sweep from the repository root with:
+
+```bash
+TR_BASE="$PWD/tools/experiments/multitransfer/output" \
+  bash tools/experiments/multitransfer/multitransfer-set.bash
+```
+
+Setting `TR_BASE` explicitly places the generated CSV files and node logs in the directory read by the bundled analysis notebooks.
 
 ## Output files
 
@@ -621,7 +630,7 @@ The notebook assumes that all CSV files under `../output` have compatible named 
 nimble debugNode
 export TR_NODE_BINARY="$PWD/tools/node/node-debug"
 export TR_LOG_LEVEL='INFO;trace:mix-transport-messages'
-tools/experiments/multitransfer/multitransfer.bash \
+bash tools/experiments/multitransfer/multitransfer.bash \
   20 50 5 1000000 true default none
 ```
 
