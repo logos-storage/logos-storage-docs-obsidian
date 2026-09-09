@@ -5,6 +5,7 @@ related:
   - "[[Mix Transport Implementation Walk Through - Wire Format Foundation]]"
   - "[[Mix Transport Implementation Walk Through - Reply Credential Store]]"
   - "[[Mix Transport Implementation Walk Through - Session Registry]]"
+  - "[[Mix Transport Implementation Walk Through - Concurrent Connect and Test Injection]]"
   - "[[Mix Transport SURB Replenishment Strategy]]"
   - "[[Mix Transport Implementation Walk Through - SURB Replenishment]]"
 ---
@@ -30,7 +31,9 @@ await transport.connect(destinationPeerId)
 
 The caller supplies the real `PeerId` of the remote Mix node. MixTransport constructs `MixDestination.exitNode(destinationPeerId)` internally because the transport uses exit-equals-destination routing exclusively.
 
-Before sending anything, the initiator checks `SessionStore` for an existing session registered under that destination. If it finds an established session, it returns the same `TransportSession` immediately. This preserves the existing `sessionId` and prevents a repeated `connect` call from creating a second peer relationship for the same destination. If the existing session is still pending, the current implementation returns an error instead of starting a concurrent handshake.
+Before sending anything, the initiator checks `SessionStore` for an existing session registered under that destination. If it finds an established session, it returns the same `TransportSession` immediately. This preserves the existing `sessionId` and prevents a repeated `connect` call from creating a second peer relationship for the same destination.
+
+When several callers request the same destination while its handshake is still pending, `ConnectAttemptCoordinator` lets every caller wait for the same transport-owned operation. Cancelling one caller does not cancel the handshake while another caller remains. If the final caller is cancelled, the coordinator cancels the now-unobserved handshake and removes the failed pending session through the normal `connectInternal` cleanup. [[Mix Transport Implementation Walk Through - Concurrent Connect and Test Injection]] describes the coordinator, its cancellation paths and the delayed-acknowledgement test seam.
 
 For a new destination, the initiator generates a random `PeerId` to use as `sessionId` and adds a pending initiator session to the registry. It then asks its local `MixProtocol` to create the public SURBs and private reply credentials carried by the handshake.
 

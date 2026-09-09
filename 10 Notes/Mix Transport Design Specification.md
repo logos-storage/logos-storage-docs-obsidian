@@ -60,7 +60,7 @@ recipient-side Connection.peerId = anonymous sessionId
 
 The recipient never learns the initiator's authenticated libp2p identity from this transport. Its `sessionId` is a local pseudonymous peer key used to associate streams and application state belonging to the same anonymous session. It is not inserted into the ordinary libp2p peer store and is not used with `Switch.connect` or `Switch.dial`.
 
-`connect(destination)` reuses an established session for that destination. The session pseudonym remains stable while the consumer considers that peer connected. Opening or closing an individual stream does not create a new peer identity. Removing the complete session and later connecting again creates a new pseudonym, which the recipient observes as a new peer.
+`connect(destination)` reuses an established session for that destination. Concurrent calls made while the first handshake is pending share one transport-owned connection attempt and receive the same session when it succeeds. Cancelling one caller does not cancel the shared attempt while another caller remains; transport shutdown cancels every outstanding attempt. The session pseudonym remains stable while the consumer considers that peer connected. Opening or closing an individual stream does not create a new peer identity. Removing the complete session and later connecting again creates a new pseudonym, which the recipient observes as a new peer.
 
 ## Session Establishment
 

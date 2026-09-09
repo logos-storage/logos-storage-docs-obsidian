@@ -7,6 +7,7 @@ related:
 - [[Mix Transport Implementation Walk Through - Reply Credential Store]]
 - [[Mix Transport Implementation Walk Through - Session Registry]]
 - [[Mix Transport Implementation Walk Through - Connect Handshake]]
+- [[Mix Transport Implementation Walk Through - Concurrent Connect and Test Injection]]
 - [[Mix Transport Implementation Walk Through - Virtual Stream Registry]]
 - [[Mix Transport Implementation Walk Through - Stream Establishment Round Trip]]
 - [[Mix Transport Implementation Walk Through - Application Connection and Protocol Dispatch]]
