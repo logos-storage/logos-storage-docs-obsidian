@@ -15,6 +15,8 @@ related:
 
 ## Purpose
 
+Storage-specific integration progress is maintained in [[Mix Transport Logos Storage Integration Plan]]. The working per-download implementation is described in [[Mix Transport Logos Storage Integration - Download Transport Selection]]: each download selects Direct or Mix, with separate peer connection state and no direct fallback for a Mix request. The generic transport described here does not itself decide which providers belong to a Storage download's swarm.
+
 `MixTransport` provides long-lived, multiplexed libp2p-style connections over the anonymous Mix packet service. Application protocols continue to work with normal `Connection` operations and mounted `LPProtocol` handlers, while the transport owns the session pseudonym, stream multiplexing, chunking, ordering, acknowledgements, return-path SURBs, backpressure and reliability policy.
 
 The generic implementation lives in the `libp2p-mix-transport` repository. Logos Storage is its first consumer, but block exchange, DHT proxy behavior and Storage-specific peer management do not belong in the transport package.
@@ -88,6 +90,8 @@ establish initiator session S
 The private credentials remain at the initiator. The recipient receives only public SURBs. Successful recovery consumes the credential identified by that reply and records its identifier as retired. A redundant copy travelling through another SURB is recovered with its own credential, after which the idempotent `ConnectAck` transition observes that the session is already established and has no second effect.
 
 ## Virtual Streams and Protocol Dispatch
+
+Either endpoint may open a stream within an established session. The recipient calls `connect` or `dial` with the anonymous peer ID to reuse that session; the recipient cannot create a new session back to an otherwise unknown initiator. A recipient-originated `OpenStream` uses existing session SURBs and carries a supply snapshot but no attached SURBs. Its `StreamAck` or `StreamReject` uses the forward path. See [[Mix Transport Implementation Walk Through - Recipient-Originated Streams]] for the role-aware lookup, dispatch, duplicate handling, and cleanup. The initiator-originated exchange described below remains unchanged.
 
 One session carries multiple virtual application streams. A stream is identified by `(sessionId, streamId)`. The endpoint that opens a stream chooses its ID, and the other endpoint uses the same ID.
 

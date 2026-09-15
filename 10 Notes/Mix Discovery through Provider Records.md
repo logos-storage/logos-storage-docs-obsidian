@@ -10,7 +10,17 @@ related:
 ---
 # Mix Discovery through Provider Records
 
-When a node discovers providers for a CID, the returned provider record already identifies nodes that are relevant to the requested content. If the provider record also carries the provider's Mix public key, the requester can add the provider to the Mix node pool before calling `MixTransport.connect(providerPeerId)`. Provider discovery then serves two related purposes: finding a content provider and obtaining the public information required to route anonymously to that provider.
+## Current decision — 12 September 2026
+
+Provider discovery identifies nodes relevant to a CID. A provider's Mix multiaddress also supplies the endpoint and public keys needed to contact that provider anonymously. Storage PR 1526 has merged the address-advertisement support; passing those discovered addresses through the download and connection paths is the next integration work described in [[Mix Transport Logos Storage Integration Plan]].
+
+The adopted `/mix-transport/` component carries 65 public-key bytes (33 libp2p key bytes and 32 Mix key bytes), encoded as base64 in the textual multiaddress. The endpoint is carried by the preceding address components. Storage uses the codec registration supplied by MixTransport rather than defining its own codec number.
+
+Use the address-aware MixTransport API and validate the advertised identity against the provider's peer ID. The new explicit-destination Mix API does not require inserting the provider into the relay pool: destination information and relay selection are separate inputs. The working implementation now passes these addresses through manifest and BlockExchange connections; see [[Mix Transport Logos Storage Integration - Download Transport Selection]] for the validation and swarm-admission path.
+
+## Historical design exploration
+
+The remaining sections record the alternatives considered before the codec and explicit-destination API were implemented. In particular, the suggestions to enroll providers in the relay pool, define a smaller key-only component, or extend the provider-record format are not the adopted baseline. The considerations about signed records, record size, and address freshness remain relevant.
 
 ## Information already present in a provider record
 

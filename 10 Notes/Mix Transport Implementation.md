@@ -5,6 +5,9 @@ related:
   - "[[New Logos Storage Block Exchange Protocol]]"
 link: https://hackmd.io/i6vSY7gPTRqwn4XtVjIrmg
 ---
+
+> These are historical integration brainstorming notes. For the implemented baseline, see [[Mix Transport Logos Storage Integration Example]]; for the current sequence of work after PR 1526, see [[Mix Transport Logos Storage Integration Plan]]. Provisional statements below are not the current implementation contract.
+
 - Discovery: this gives us traditional `peerId`.
 	- Normally, as part of the discovery process, `connect` on the switch is called, which populates the `peers` stores in both the network (`NetworkPeer`) and the engine (`PeerCtx`) in response to the `PeerEvent.Joined`:
 		- we cannot do that here, because we have to use Mix to communicate with this peer

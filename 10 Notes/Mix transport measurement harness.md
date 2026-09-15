@@ -1,6 +1,8 @@
 > [!info] Canonical source
 > This note mirrors `tools/README-MC.md` from the `libp2p-mix-transport` repository. Keep the explanatory content and commands synchronized with that repository file when the harness changes.
 
+Recorded experiment results and outstanding investigations are kept separately in [[Mix transport experiment runs - 2026-09-09]].
+
 This guide explains how to run the standalone Mix transport experiments, how the harness constructs its network, how Linux `tc netem` changes that network, and how the R Markdown files turn experiment output into tables and plots.
 
 The harness has three distinct parts:

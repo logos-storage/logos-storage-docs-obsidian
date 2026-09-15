@@ -14,6 +14,8 @@ The established `TransportStream` is also the libp2p `Connection` passed to the 
 
 ## Initiator: Preparing `OpenStream`
 
+This section describes opening from the **session initiator**. Either endpoint can now open streams: the recipient-side lookup, reverse request, and forward acknowledgement are covered in [[Mix Transport Implementation Walk Through - Recipient-Originated Streams]]. The detailed SURB preparation below applies only to initiator-originated requests.
+
 `dial` first calls `connect(destination)`. If an established session already exists for the destination, `connect` returns it without starting another session handshake. Otherwise it completes the `Connect` and `ConnectAck` exchange before stream creation continues.
 
 The initiator then calls `session.addOutboundStream(codec)`. This allocates the next locally owned stream identifier and stores a pending outbound stream. For a session created by this endpoint, the first identifier is `1`.

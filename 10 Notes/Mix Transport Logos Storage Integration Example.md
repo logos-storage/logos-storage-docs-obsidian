@@ -10,13 +10,15 @@ related:
 
 ## Purpose
 
+This note records the original reference integration and its node-wide transport selection. The current per-download implementation supersedes that selection and the peer-ID-only connection examples below; see [[Mix Transport Logos Storage Integration - Download Transport Selection]] for the current code path, and [[Mix Transport Logos Storage Integration Plan]] for remaining work. On 12 September 2026 the integration branch was rebased on master including PR 1526, retaining its address-advertisement setup.
+
 The `feat/mix-transport` branch in `logos-storage-nim` contains a reference integration of the generic `libp2p_mix_transport` package. The integration uses the existing Storage MixProtocol setup and applies MixTransport to BlockExchange streams and manifest fetching. The existing DHT proxy path is left unchanged in this increment.
 
 The integration preserves the protocol-facing `Connection` API. BlockExchange and the manifest protocol continue to read from and write to libp2p `Connection` values; only the operation that opens a connection changes when Mix is enabled.
 
 ## Package boundary
 
-The generic transport is included as `vendor/nim-libp2p-mix-transport`. `storage/mix.nim` is a narrow Storage facade that imports and re-exports the package:
+The generic transport is included as `vendor/libp2p-mix-transport`. `storage/mix.nim` is a narrow Storage facade that imports and re-exports the package:
 
 ```nim
 import pkg/libp2p_mix_transport
