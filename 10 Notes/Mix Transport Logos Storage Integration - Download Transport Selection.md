@@ -176,10 +176,10 @@ BlockExcNetwork* = ref object of LPProtocol
 BlockExcNetworks* = ref object
   direct*: BlockExcNetwork
   mix*: BlockExcNetwork
-  protocol*: LPProtocol
+  dispatchProtocol*: LPProtocol
 ```
 
-`BlockExcNetworks` is the shared holder passed to discovery and the engine. The `direct` field refers to the Direct protocol instance. The `mix` field is nil when Mix is disabled; startup creates a Mix instance only after MixTransport exists. Neither protocol instance owns the other. The holder's `protocol` field is the single mounted entry point that selects which instance handles an incoming connection.
+`BlockExcNetworks` is the shared holder passed to discovery and the engine. The `direct` field refers to the Direct protocol instance. The `mix` field is nil when Mix is disabled; startup creates a Mix instance only after MixTransport exists. Neither protocol instance owns the other. The holder's `dispatchProtocol` field is the single mounted entry point that selects which instance handles an incoming connection.
 
 Separate peers are important even when both downloads contact the same provider. `NetworkPeer` retains a sending connection, so sharing one peer object would allow a Mix download to reuse a Direct connection, or the reverse:
 
@@ -209,7 +209,7 @@ proc new*(
       repoStore, networks, blockDiscovery, advertiser, peerStore, downloadManager
     )
   # Other construction omitted.
-  switch.mount(networks.protocol)
+  switch.mount(networks.dispatchProtocol)
 ```
 
 Discovery and the engine retain the same holder, not copies of its fields. Adding the Mix instance during startup therefore makes that instance available to both consumers. With Mix disabled, the holder continues to contain only Direct.
@@ -340,7 +340,7 @@ proc newBlockExcNetworks*(direct: BlockExcNetwork): BlockExcNetworks =
       return
     await network.handleConnection(conn)
 
-  self.protocol = lp_protocol.new(
+  self.dispatchProtocol = lp_protocol.new(
     LPProtocol, @[Codec], dispatch, maxIncomingStreamsTotal = direct.maxInflight
   )
   self
@@ -348,7 +348,7 @@ proc newBlockExcNetworks*(direct: BlockExcNetwork): BlockExcNetworks =
 
 Ordinary libp2p protocol selection invokes this handler with an ordinary connection. MixTransport instead finds the BlockExchange codec in the Switch's protocol registry and invokes the same handler with a `TransportStream`. Both connection types satisfy the `Connection` parameter.
 
-The type check selects Mix for a `TransportStream` and Direct otherwise. If Mix is absent, an incoming `TransportStream` is closed; the dispatcher does not pass that stream to Direct. Because Storage mounts only `networks.protocol`, both incoming paths use that entry point's incoming-stream quota.
+The type check selects Mix for a `TransportStream` and Direct otherwise. If Mix is absent, an incoming `TransportStream` is closed; the dispatcher does not pass that stream to Direct. Because Storage mounts only `networks.dispatchProtocol`, both incoming paths use that entry point's incoming-stream quota.
 
 After dispatch, `handleConnection` selects a peer in the chosen instance and starts the peer's read loop:
 
@@ -516,7 +516,7 @@ Swarm* = ref object
 
 For example, two downloads may both include provider P: the Direct download uses P's Direct connection and context, while the Mix download uses P's Mix connection and context. Each swarm can store P using its `PeerId` alone, because the owning download supplies the transport choice. There is no need to store a `(PeerId, transport)` pair for every swarm member.
 
-There is one shared limit to distinguish from this separate state: both incoming paths use the mounted `networks.protocol` entry point's incoming-stream reservations. The independent protocol instances do not create separate mounted quotas.
+There is one shared limit to distinguish from this separate state: both incoming paths use the mounted `networks.dispatchProtocol` entry point's incoming-stream reservations. The independent protocol instances do not create separate mounted quotas.
 
 ## Sending replies from the anonymous recipient
 
