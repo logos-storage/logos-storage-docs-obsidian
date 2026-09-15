@@ -172,7 +172,6 @@ BlockExcNetwork* = ref object of LPProtocol
   handlers*: BlockExcHandlers
   # Other request, concurrency, and lifecycle fields omitted.
   mixTransport: MixTransport
-  transport: DownloadTransport
 
 BlockExcNetworks* = ref object
   direct*: BlockExcNetwork
@@ -227,7 +226,17 @@ proc new*(
 ): BlockExcNetwork
 ```
 
-Without `mixTransport`, the constructor creates Direct and subscribes to Switch peer events. With a non-nil `mixTransport`, the constructor creates Mix and subscribes to that service's session events. The constructor derives the private `transport` field from this argument. A Mix instance therefore has its transport service from construction onward; there is no unattached Mix instance waiting to become usable.
+Without `mixTransport`, the constructor creates Direct and subscribes to Switch peer events. With a non-nil `mixTransport`, the constructor creates Mix and subscribes to that service's session events. A Mix instance therefore has its transport service from construction onward; there is no unattached Mix instance waiting to become usable.
+
+Internal decisions use a small helper whose only source of truth is the service reference:
+
+```nim
+func isMixDownload*(self: BlockExcNetwork): bool =
+  ## Whether this protocol instance handles downloads through MixTransport.
+  not self.mixTransport.isNil
+```
+
+The helper describes the protocol instance, not a node-wide setting. `DownloadTransport` still represents each download's selected transport and is used by the engine and discovery to select an instance from the holder.
 
 ### Creating Mix and installing the engine callbacks
 
@@ -320,7 +329,7 @@ The holder constructor creates the mounted entry point. This entry point has no 
 
 ```nim
 proc newBlockExcNetworks*(direct: BlockExcNetwork): BlockExcNetworks =
-  doAssert direct.transport == DownloadTransport.Direct
+  doAssert not direct.isMixDownload
   let self = BlockExcNetworks(direct: direct)
   proc dispatch(
       conn: Connection, codec: string
@@ -347,7 +356,7 @@ After dispatch, `handleConnection` selects a peer in the chosen instance and sta
 proc handleConnection(
     self: BlockExcNetwork, conn: Connection
 ) {.async: (raises: [CancelledError]).} =
-  if (conn of TransportStream) != (self.transport == DownloadTransport.Mix):
+  if (conn of TransportStream) != self.isMixDownload:
     await conn.close()
     return
   let peer = self.getOrCreatePeer(conn.peerId)
@@ -527,15 +536,14 @@ If the peer already exists in this protocol instance's table, the procedure retu
 var getConn: ConnProvider = proc(): Future[Connection] {.
     async: (raises: [CancelledError])
 .} =
-  case self.transport
-  of DownloadTransport.Mix:
+  if self.isMixDownload:
     trace "Opening block exchange stream via MixTransport", peer
     let stream = (await self.mixTransport.dial(peer, Codec)).valueOr:
       trace "Unable to open MixTransport block exchange stream", peer, error
       return nil
     return stream
 
-  of DownloadTransport.Direct:
+  else:
     try:
       trace "Getting new connection stream", peer
       return await self.switch.dial(peer, Codec)
@@ -545,7 +553,7 @@ var getConn: ConnProvider = proc(): Future[Connection] {.
       trace "Unable to connect to blockexc peer", exc = exc.msg
 ```
 
-The private `transport` field selects the dialing branch. A Mix instance receives a non-nil `mixTransport` at construction and retains that reference. If Mix dialing fails, the callback returns nil without trying Direct. The Direct branch uses `Switch.dial`. When Mix is disabled, there is no Mix instance to select in the first place.
+`isMixDownload` selects the dialing branch by checking the protocol instance's service reference. A Mix instance receives a non-nil `mixTransport` at construction and retains that reference. If Mix dialing fails, the callback returns nil without trying Direct. The Direct branch uses `Switch.dial`. When Mix is disabled, there is no Mix instance to select in the first place.
 
 Both successful branches return a `Connection`. A `TransportStream` satisfies that type through inheritance, so `NetworkPeer` can use the same read, write, and connection-reuse logic for either transport.
 
@@ -667,7 +675,7 @@ proc dialPeer*(self: BlockExcNetwork, peer: PeerRecord) {.async.}
 After checking availability, self-dialing, and any reusable Direct peer, its Mix branch performs:
 
 ```nim
-if self.transport == DownloadTransport.Mix:
+if self.isMixDownload:
   let mixTransport = self.mixTransport
   trace "Connecting to peer via MixTransport", peer = peer.peerId
   let addresses = mixAddresses(peer.peerId, peer.addresses.mapIt(it.address))
