@@ -37,7 +37,7 @@ func parseDownloadTransport*(value: string): Result[DownloadTransport, string] =
     err("transport must be 'direct' or 'mix'")
 ```
 
-An unrecognized value produces HTTP 400. A Mix request fails if Mix has not been attached; the request does not fall back to direct dialing. Existing internal callers that omit the parameter select Direct. The C-library download API does not expose this parameter. Discovery's DHT proxy selection is configured independently.
+An unrecognized value produces HTTP 400. A Mix request fails if Mix is not enabled; the request does not fall back to direct dialing. Existing internal callers that omit the parameter select Direct. The C-library download API does not expose this parameter. Discovery's DHT proxy selection is configured independently.
 
 ## From the API to a download
 
@@ -161,32 +161,61 @@ The worker later reads `download.ctx.transport` whenever it selects the protocol
 
 ## Keeping peer connections separate
 
-### Two instances of the same libp2p protocol type
+### Independent Direct and Mix protocol instances
 
-`BlockExcNetwork` implements the BlockExchange libp2p protocol and inherits from `LPProtocol`. Its declaration is in `storage/blockexchange/network/network.nim`. The following excerpt shows the fields relevant here; the declaration also contains lifecycle and concurrency state:
+`BlockExcNetwork` implements the BlockExchange libp2p protocol and inherits from `LPProtocol`. Each instance owns its peers, sending connections, message callbacks, and send-concurrency limit. The relevant declarations in `storage/blockexchange/network/network.nim` are:
 
 ```nim
 BlockExcNetwork* = ref object of LPProtocol
   peers*: Table[PeerId, NetworkPeer]
   switch*: Switch
   handlers*: BlockExcHandlers
-  mixTransport*: MixTransport
-  mixNetwork*: BlockExcNetwork
+  # Other request, concurrency, and lifecycle fields omitted.
+  mixTransport: MixTransport
   transport: DownloadTransport
+
+BlockExcNetworks* = ref object
+  direct*: BlockExcNetwork
+  mix*: BlockExcNetwork
+  protocol*: LPProtocol
 ```
 
-Storage constructs two instances of this type. The outer instance handles Direct peers and also provides the single mounted protocol entry point. Its `mixNetwork` field refers to the second instance, which handles Mix peers. Both instances use the same BlockExchange codec, message encoding, and message-processing implementation. Their peer tables and engine callbacks are separate.
+`BlockExcNetworks` is the shared holder passed to discovery and the engine. The `direct` field refers to the Direct protocol instance. The `mix` field is nil when Mix is disabled; startup creates a Mix instance only after MixTransport exists. Neither protocol instance owns the other. The holder's `protocol` field is the single mounted entry point that selects which instance handles an incoming connection.
 
-That separation matters when the same provider participates in both a Direct and a Mix download. The provider has the same real peer ID in both cases, but `NetworkPeer` retains a sending connection. Sharing a peer table would allow one download to obtain a connection created for the other transport.
+Separate peers are important even when both downloads contact the same provider. `NetworkPeer` retains a sending connection, so sharing one peer object would allow a Mix download to reuse a Direct connection, or the reverse:
 
 ```text
-network.peers[providerId]             → Direct NetworkPeer and sending connection
-network.mixNetwork.peers[providerId]  → Mix NetworkPeer and sending connection
+networks.direct.peers[providerId] -> Direct peer and sending connection
+networks.mix.peers[providerId]    -> Mix peer and sending connection
 ```
 
-### Where the second instance comes from
+### Construction before Mix startup
 
-The constructor has the following signature:
+`StorageServer.new`, in `storage/storage.nim`, creates the Direct instance and the holder. The following excerpt omits Switch, store, and other service construction, but retains the declarations and calls that establish ownership:
+
+```nim
+proc new*(
+    T: type StorageServer,
+    config: StorageConf,
+    privateKey: StoragePrivateKey,
+    logFile: Option[IoHandle] = IoHandle.none,
+): StorageServer =
+  # Switch and other service construction omitted.
+  let
+    directNetwork = BlockExcNetwork.new(switch)
+    networks = newBlockExcNetworks(directNetwork)
+    # Store and supporting service construction omitted.
+    blockDiscovery = DiscoveryEngine.new(repoStore, peerStore, networks, discovery)
+    engine = BlockExcEngine.new(
+      repoStore, networks, blockDiscovery, advertiser, peerStore, downloadManager
+    )
+  # Other construction omitted.
+  switch.mount(networks.protocol)
+```
+
+Discovery and the engine retain the same holder, not copies of its fields. Adding the Mix instance during startup therefore makes that instance available to both consumers. With Mix disabled, the holder continues to contain only Direct.
+
+The individual protocol constructor accepts the transport service at construction:
 
 ```nim
 proc new*(
@@ -194,28 +223,15 @@ proc new*(
     switch: Switch,
     connProvider: ConnProvider = nil,
     maxInflight = DefaultMaxInflight,
-    transport = DownloadTransport.Direct,
+    mixTransport: MixTransport = nil,
 ): BlockExcNetwork
 ```
 
-During construction, after creating the `LPProtocol` object and initializing its state, the constructor executes this branch:
+Without `mixTransport`, the constructor creates Direct and subscribes to Switch peer events. With a non-nil `mixTransport`, the constructor creates Mix and subscribes to that service's session events. The constructor derives the private `transport` field from this argument. A Mix instance therefore has its transport service from construction onward; there is no unattached Mix instance waiting to become usable.
 
-```nim
-self.transport = transport
-if transport == DownloadTransport.Direct:
-  self.mixNetwork =
-    BlockExcNetwork.new(
-      switch, maxInflight = maxInflight, transport = DownloadTransport.Mix
-    )
-```
+### Creating Mix and installing the engine callbacks
 
-The normal call selects `DownloadTransport.Direct`, so the outer instance constructs a second instance with `DownloadTransport.Mix`. The Mix instance does not construct another instance.
-
-### Attaching MixTransport and registering session events
-
-The protocol instance's `transport` field also determines how each protocol instance learns that a peer has become available or departed. During `BlockExcNetwork.init`, the outer instance subscribes to ordinary Switch peer events. The Mix instance skips those subscriptions: its application peers are identified by MixTransport sessions, not by the physical connections used to relay Mix packets.
-
-The Mix instance receives its transport reference during Storage startup. `StorageServer.start` calls `startMixTransport` after creating the Mix protocol. The implementation in `storage/storage.nim` is:
+During startup, `StorageServer.start` creates the Mix protocol, then calls `startMixTransport`:
 
 ```nim
 proc startMixTransport*(
@@ -225,26 +241,57 @@ proc startMixTransport*(
     return
 
   let mixTransport = newMixTransport(mixProto)
-  s.storageNode.engine.network.attachMixTransport(mixTransport)
+  s.storageNode.engine.enableMixNetwork(mixTransport)
   s.storageNode.manifestProtocol.attachMixTransport(mixTransport)
   (await mixTransport.start()).isOkOr:
-    s.storageNode.engine.network.detachMixTransport()
+    await s.storageNode.engine.disableMixNetwork()
     s.storageNode.manifestProtocol.detachMixTransport()
     raise newException(StorageError, "Failed to start MixTransport: " & error)
   s.mixTransport = mixTransport
 ```
 
-Storage creates one `MixTransport` object and supplies that same object to BlockExchange and Manifest. The BlockExchange attachment has two responsibilities: make the transport available for outgoing dialing and subscribe to its session events. The Manifest attachment is a separate protocol-specific operation; the code below describes the BlockExchange operation.
-
-The initial call targets the outer `BlockExcNetwork` instance stored at `s.storageNode.engine.network`. That call delegates to the Mix instance, as shown in `storage/blockexchange/network/network.nim`:
+BlockExchange and Manifest receive the same MixTransport service. Manifest retains its own attachment API. For BlockExchange, `enableMixNetwork` in `storage/blockexchange/engine/engine.nim` constructs an independent protocol instance, installs its engine callbacks, and publishes that instance through the shared holder:
 
 ```nim
-proc attachMixTransport*(self: BlockExcNetwork, mixTransport: MixTransport) =
-  if self.transport == DownloadTransport.Direct:
-    self.mixNetwork.attachMixTransport(mixTransport)
-    return
-  doAssert self.mixTransport.isNil, "MixTransport is already attached"
+proc enableMixNetwork*(self: BlockExcEngine, mixTransport: MixTransport) =
+  doAssert not mixTransport.isNil
+  doAssert self.networks.mix.isNil, "Mix BlockExchange is already enabled"
+  let network = BlockExcNetwork.new(
+    self.networks.direct.switch,
+    maxInflight = self.networks.direct.sendConcurrencyLimit,
+    mixTransport = mixTransport,
+  )
+  self.configureNetwork(network, DownloadTransport.Mix)
+  self.networks.mix = network
+```
 
+The `sendConcurrencyLimit` accessor returns the Direct instance's configured maximum number of concurrent sends. Passing that value to the Mix constructor preserves the same configured limit, but each instance has its own semaphore: Direct sends do not occupy Mix send slots.
+
+`configureNetwork` binds message and peer-lifecycle callbacks to the chosen transport. The engine constructor calls the same helper for Direct. For example, the presence callback installed by the helper is:
+
+```nim
+proc configureNetwork(
+    self: BlockExcEngine, network: BlockExcNetwork, transport: DownloadTransport
+) =
+  # Other callbacks omitted.
+  proc blockPresenceHandler(
+      peer: PeerId, presence: seq[BlockPresence]
+  ): Future[void] {.async: (raw: true, raises: []).} =
+    self.blockPresenceHandler(peer, presence, transport)
+
+  # network.handlers receives this callback and the other handlers.
+```
+
+The callback captures `transport`. A presence message decoded by the Mix instance consequently reaches the engine with `DownloadTransport.Mix`; the Direct instance's callback supplies `DownloadTransport.Direct`. No extra transport field is needed in the BlockExchange message.
+
+There is no `await` between creating the Mix instance, configuring its callbacks, and assigning `networks.mix`. Startup completes this wiring before awaiting MixTransport startup. If startup fails, `disableMixNetwork` removes the instance from the holder, unregisters its session callback through `network.stop()`, and clears the engine's Mix peer state. Normal server shutdown stops MixTransport first, allowing session-closed events to run, then removes the Mix protocol instance.
+
+### Mix session events and Direct peer events
+
+The Mix protocol constructor calls `subscribeMixSessions` in `storage/blockexchange/network/network.nim`. That procedure installs a callback on the instance's MixTransport service:
+
+```nim
+proc subscribeMixSessions(self: BlockExcNetwork) =
   proc sessionEventHandler(
       event: SessionEvent
   ): Future[void] {.async: (raises: [CancelledError]).} =
@@ -254,98 +301,91 @@ proc attachMixTransport*(self: BlockExcNetwork, mixTransport: MixTransport) =
     of SessionEventKind.Closed:
       await self.unregisterPeer(event.peerId)
 
-  self.mixTransport = mixTransport
   self.mixSessionEventHandler = sessionEventHandler
-  mixTransport.addSessionEventHandler(sessionEventHandler)
+  self.mixTransport.addSessionEventHandler(sessionEventHandler)
 ```
 
-After delegation, `self` refers to the Mix protocol instance. The assignment to `self.mixTransport` gives that instance's outgoing connection provider the transport it will later use for `dial`. The nested `sessionEventHandler` captures the same instance, so its calls to `registerPeer` and `unregisterPeer` operate on the Mix peer table.
+Registration does not establish a session or add a remote peer. Later, an `Established` event creates or retrieves the Mix `NetworkPeer` and invokes the engine's Mix peer-joined callback. A `Closed` event removes the Mix peer and retained session entries and invokes the corresponding peer-departed callback.
 
-Attachment registers the callback; it does not itself establish a session or add a remote peer. Later, when MixTransport publishes a session event:
+This callback handles MixTransport session events on both endpoints. For a session that node A initiates with node B:
 
-- `Established` calls `registerPeer`, which creates or retrieves the corresponding `NetworkPeer` and invokes the engine's peer-joined callback.
-- `Closed` calls `unregisterPeer`, which removes the protocol instance's peer and retained session entries and invokes the engine's peer-departed callback.
+- On A, the event carries B's real peer ID. A registers B in its Mix peer table.
+- On B, the event carries the anonymous session ID representing A. B registers that anonymous identity in its Mix peer table.
 
-The callback above handles **MixTransport session events only**. Each Mix-enabled Storage node registers this callback on its own MixTransport instance. The callback runs both when that node establishes a session as the initiator and when that node accepts a session as the recipient. These are two roles within Mix communication, not a distinction between Direct and Mix communication.
+Direct membership follows a separate callback registered by the Direct instance's `init` method with the Switch. That callback receives Switch `Joined` and `Left` events. A physical Switch connection to a Mix relay does not therefore create a Mix BlockExchange peer: only a MixTransport application session produces that Mix peer-lifecycle notification.
 
-For the same Mix session between nodes A and B, where A initiated the session:
+### Dispatching incoming connections through one mounted codec
 
-- On A, the MixTransport `Established` event carries B's real peer ID. A's `sessionEventHandler` registers B in A's Mix BlockExchange peer table.
-- On B, the MixTransport `Established` event carries the anonymous session ID representing A. B's `sessionEventHandler` registers that identity in B's Mix BlockExchange peer table.
-
-Ordinary Direct peer membership follows a different callback: the outer protocol instance's `peerEventHandler`, registered with the Switch. That callback handles Switch `Joined` and `Left` events. It does not receive the MixTransport session events described here.
-
-Storage attaches the callbacks before starting MixTransport, so they are registered when the transport begins operating. If transport startup fails, the cleanup path detaches both protocols. BlockExchange retains the callback in `mixSessionEventHandler` so `detachMixTransport` can remove that exact subscription.
-
-A Switch connection to a Mix relay therefore does not, by itself, add a peer to the Mix BlockExchange table. That table's lifecycle notifications come from established application sessions. The outer protocol instance continues to handle ordinary Switch peer events, subject to its relay exclusions.
-
-### One mounted protocol entry point
-
-In `storage/storage.nim`, Storage constructs `network = BlockExcNetwork.new(switch)` and later calls `switch.mount(network)`. Storage does not mount `network.mixNetwork` separately. There is one registration of the BlockExchange codec.
-
-An ordinary incoming connection reaches the mounted handler through libp2p protocol selection. A Mix opening reaches the same handler differently: MixTransport looks up the requested BlockExchange codec in the Switch's protocol registry and invokes the registered handler with a `TransportStream`. Because `TransportStream` inherits from `Connection`, the handler accepts either connection type through its normal parameter.
-
-The Switch registration is therefore also the application-protocol registry used by MixTransport. Mix application bytes do not need to pass through an additional ordinary connection before reaching BlockExchange.
-
-### Selecting the peer table for an incoming connection
-
-The method that installs the protocol handler is:
+The holder constructor creates the mounted entry point. This entry point has no peer table of its own; its handler chooses a protocol instance:
 
 ```nim
-method init*(self: BlockExcNetwork) {.raises: [].}
+proc newBlockExcNetworks*(direct: BlockExcNetwork): BlockExcNetworks =
+  doAssert direct.transport == DownloadTransport.Direct
+  let self = BlockExcNetworks(direct: direct)
+  proc dispatch(
+      conn: Connection, codec: string
+  ): Future[void] {.async: (raises: [CancelledError]).} =
+    let network = if conn of TransportStream: self.mix else: self.direct
+    if network.isNil:
+      await conn.close()
+      return
+    await network.handleConnection(conn)
+
+  self.protocol = lp_protocol.new(
+    LPProtocol, @[Codec], dispatch, maxIncomingStreamsTotal = direct.maxInflight
+  )
+  self
 ```
 
-Inside `init`, the following nested procedure is assigned to `self.handler`:
+Ordinary libp2p protocol selection invokes this handler with an ordinary connection. MixTransport instead finds the BlockExchange codec in the Switch's protocol registry and invokes the same handler with a `TransportStream`. Both connection types satisfy the `Connection` parameter.
+
+The type check selects Mix for a `TransportStream` and Direct otherwise. If Mix is absent, an incoming `TransportStream` is closed; the dispatcher does not pass that stream to Direct. Because Storage mounts only `networks.protocol`, both incoming paths use that entry point's incoming-stream quota.
+
+After dispatch, `handleConnection` selects a peer in the chosen instance and starts the peer's read loop:
 
 ```nim
-proc handler(
-    conn: Connection, proto: string
-): Future[void] {.async: (raises: [CancelledError]).} =
-  let peerId = conn.peerId
-  if conn of TransportStream and not self.mixNetwork.isNil:
-    let peer = self.mixNetwork.getOrCreatePeer(peerId)
-    await peer.readLoop(conn)
+proc handleConnection(
+    self: BlockExcNetwork, conn: Connection
+) {.async: (raises: [CancelledError]).} =
+  if (conn of TransportStream) != (self.transport == DownloadTransport.Mix):
+    await conn.close()
     return
-
-  let blockexcPeer = self.getOrCreatePeer(peerId)
-  await blockexcPeer.readLoop(conn)
+  let peer = self.getOrCreatePeer(conn.peerId)
+  await peer.readLoop(conn)
 ```
 
-For the mounted outer instance, `self.mixNetwork` refers to the Mix protocol instance. The runtime type check `conn of TransportStream` selects that instance's peer table. Ordinary connections use the outer instance's peer table.
+The additional type check protects calls made through an individual instance's own protocol handler, outside the holder's dispatcher. The original connection is neither copied nor converted. On a Mix recipient, `conn.peerId` is the anonymous session identity; on the initiator, the identity is the real destination peer ID.
 
-Nothing copies or converts the connection. The handler selects a `NetworkPeer` and starts that peer's read loop on the original connection. On a Mix session recipient, `conn.peerId` is the anonymous session identity; on the session initiator, it is the real destination identity.
+### From the selected peer to message processing
 
-### Why decoded messages continue along the selected path
-
-Peer creation is performed by:
+`handleConnection` calls `getOrCreatePeer`. For a new peer, that procedure creates callbacks bound to the owning protocol instance:
 
 ```nim
-proc getOrCreatePeer(self: BlockExcNetwork, peer: PeerId): NetworkPeer
+proc getOrCreatePeer(self: BlockExcNetwork, peer: PeerId): NetworkPeer =
+  # Existing-peer lookup and connection-provider construction omitted.
+  let rpcHandler = proc(p: NetworkPeer, msg: Message) {.async: (raises: []).} =
+    await self.rpcHandler(p, msg)
+  # Remaining callbacks and NetworkPeer construction omitted.
 ```
 
-For a new peer, this procedure creates callbacks bound to the selected protocol instance. For example, the decoded-message callback is:
-
-```nim
-let rpcHandler = proc(p: NetworkPeer, msg: Message) {.async: (raises: []).} =
-  await self.rpcHandler(p, msg)
-```
-
-Here `self` is whichever instance received the `getOrCreatePeer` call. A peer created through `self.mixNetwork.getOrCreatePeer` consequently sends decoded messages to the Mix instance's message handler.
-
-The engine separately installs callbacks on `network.handlers` and `network.mixNetwork.handlers`. The Mix callbacks pass `DownloadTransport.Mix` into the engine's handling operations. Thus, connection selection determines the peer object, the peer object determines the protocol instance receiving decoded messages, and that instance's callbacks identify the transport to the engine. The message itself does not need an extra Direct/Mix field.
+A peer created by the Mix instance sends decoded messages to that instance's `rpcHandler`. The handler then calls the engine callbacks installed by `configureNetwork`, which supply the Mix transport choice. Direct follows the corresponding Direct path.
 
 ### Selecting the protocol instance for outgoing work
 
-For outgoing work, the download already contains its transport choice. The engine selects the instance using:
+For outgoing work, the download already contains its transport choice. The engine and discovery select from the shared holder using:
 
 ```nim
 func networkFor*(
-    self: BlockExcNetwork, transport: DownloadTransport
+    self: BlockExcNetworks, transport: DownloadTransport
 ): BlockExcNetwork =
-  if transport == DownloadTransport.Mix: self.mixNetwork else: self
+  case transport
+  of DownloadTransport.Direct: self.direct
+  of DownloadTransport.Mix: self.mix
 ```
 
-The selected peer's connection provider calls either `Switch.dial` or `MixTransport.dial`. The next section follows that sending-connection path for a session recipient.
+A missing Mix instance returns nil, not Direct. The engine rejects a new Mix download when Mix is unavailable, and discovery skips provider dialing if the selected instance is absent.
+
+Once an instance is selected, its peer's connection provider calls either `Switch.dial` or `MixTransport.dial`. The later section “Sending replies from the anonymous recipient” shows that callback and follows sending-connection reuse.
 
 ### Selecting engine peer state
 
@@ -451,7 +491,7 @@ proc downloadWorker(
     treeCid = download.treeCid
     retryInterval = self.downloadManager.retryInterval
     peers = self.peersFor(download.ctx.transport)
-    network = self.network.networkFor(download.ctx.transport)
+    network = self.networks.networkFor(download.ctx.transport)
     peerTracker = self.trackerFor(download.ctx.transport)
   # Logging and the scheduling loop follow.
 ```
@@ -467,7 +507,7 @@ Swarm* = ref object
 
 For example, two downloads may both include provider P: the Direct download uses P's Direct connection and context, while the Mix download uses P's Mix connection and context. Each swarm can store P using its `PeerId` alone, because the owning download supplies the transport choice. There is no need to store a `(PeerId, transport)` pair for every swarm member.
 
-There is one shared limit to distinguish from this separate state: both incoming paths use the outer, mounted `LPProtocol` instance's incoming-stream reservations. Creating the second instance does not create a second independently mounted protocol quota.
+There is one shared limit to distinguish from this separate state: both incoming paths use the mounted `networks.protocol` entry point's incoming-stream reservations. The independent protocol instances do not create separate mounted quotas.
 
 ## Sending replies from the anonymous recipient
 
@@ -489,8 +529,6 @@ var getConn: ConnProvider = proc(): Future[Connection] {.
 .} =
   case self.transport
   of DownloadTransport.Mix:
-    if self.mixTransport.isNil:
-      return nil
     trace "Opening block exchange stream via MixTransport", peer
     let stream = (await self.mixTransport.dial(peer, Codec)).valueOr:
       trace "Unable to open MixTransport block exchange stream", peer, error
@@ -507,7 +545,7 @@ var getConn: ConnProvider = proc(): Future[Connection] {.
       trace "Unable to connect to blockexc peer", exc = exc.msg
 ```
 
-The `transport` field selects the dialing branch. In the Mix branch, `mixTransport` determines whether the service is available; if the reference is nil or dialing fails, the callback returns nil without trying Direct. The Direct branch uses `Switch.dial`. Thus the instance's transport choice and the availability of its Mix service are separate pieces of state.
+The private `transport` field selects the dialing branch. A Mix instance receives a non-nil `mixTransport` at construction and retains that reference. If Mix dialing fails, the callback returns nil without trying Direct. The Direct branch uses `Switch.dial`. When Mix is disabled, there is no Mix instance to select in the first place.
 
 Both successful branches return a `Connection`. A `TransportStream` satisfies that type through inheritance, so `NetworkPeer` can use the same read, write, and connection-reuse logic for either transport.
 
@@ -671,7 +709,7 @@ The background consumer has this signature:
 proc discoveryTaskLoop(b: DiscoveryEngine) {.async: (raises: []).}
 ```
 
-For each queued key, the loop calls `b.discovery.find(key.cid)`. Once provider records arrive, the loop chooses `b.network.networkFor(key.transport)` for their `dialPeer` calls and waits for those attempts to finish. The underlying discovery call does not receive `key.transport`: direct versus private DHT queries remain governed by discovery's own configuration.
+For each queued key, the loop calls `b.discovery.find(key.cid)`. Once provider records arrive, the loop chooses `b.networks.networkFor(key.transport)` for their `dialPeer` calls and waits for those attempts to finish. The underlying discovery call does not receive `key.transport`: direct versus private DHT queries remain governed by discovery's own configuration.
 
 After dialing the returned providers, the discovery engine calls `onProviders`. The engine constructor registers the following discovery callback. Its parameters identify the discovered CID, the requested transport, and the returned provider records:
 ```nim

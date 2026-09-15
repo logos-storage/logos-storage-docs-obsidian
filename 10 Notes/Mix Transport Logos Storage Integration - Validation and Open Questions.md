@@ -9,6 +9,10 @@ Updated: 2026-09-15. This is a live status note, separate from the implementatio
 
 ## Recorded verification
 
+2026-09-15: the independent Direct/Mix protocol-instance refactoring passed 9 network tests, 117 engine tests, 7 discovery tests, and 3 download-selection tests with real Mix traffic (136 tests total). Storage's compile-only check passed. The new network test confirms that the mounted dispatcher closes an incoming Mix stream when Mix is disabled without creating a Direct peer. The full Storage suite was not run.
+
+The shared `BlockExcNetworks` holder now replaces recursive `mixNetwork` ownership. Mix is created with its service during enabled startup; one mounted dispatcher preserves the shared incoming quota. The same engine callback configuration is used for both protocol instances. This increment does not change the wire protocol or the legacy DHT-over-Mix path.
+
 2026-09-15: replacing `useMixSessionEvents` with the protocol instance's `DownloadTransport` field passed all eight network tests and all three download-selection tests, including real Mix traffic. No full-suite or Storage compile-only rerun was performed for this refactoring.
 
 These are results recorded during the integration work, not a claim that every check has been rerun against today's branch.

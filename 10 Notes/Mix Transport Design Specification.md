@@ -199,7 +199,9 @@ The public `disconnect(session)` operation requires the session to have no activ
 
 ## Logos Storage Integration
 
-Logos Storage will inject `MixTransport` into the network path used by block exchange. When Mix is enabled, peer establishment and stream dialing must go through the transport rather than calling `switch.connect` for the anonymous application peer.
+Logos Storage selects Direct or Mix for each download. BlockExchange uses independent `BlockExcNetwork` instances held in a shared `BlockExcNetworks` object: Direct is always present, while the Mix instance is created during Mix-enabled startup with its MixTransport service already supplied. Discovery and the engine select the instance matching the download; absence of Mix never selects Direct as a fallback.
+
+Storage mounts one BlockExchange codec entry point. Its handler dispatches ordinary connections to the Direct instance and `TransportStream` connections to the Mix instance, retaining a shared incoming-stream quota. Each instance owns separate peers, sending connections, and engine callbacks. Mix peer establishment and stream dialing use MixTransport, including recipient-side dialing within an existing anonymous session. See [[Mix Transport Logos Storage Integration - Download Transport Selection]] for construction, dispatch, and lifecycle code.
 
 The recipient-side block-exchange handler receives a normal `Connection` whose `peerId` is the session pseudonym. Transport session events, rather than raw Switch JOINED events from relay connections, must determine which anonymous application peers enter or leave the block-exchange peer set. A physical relay may also be a Storage node, but its direct Mix-overlay connection is not evidence that it opened an anonymous block-exchange session.
 
