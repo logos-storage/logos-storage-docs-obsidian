@@ -9,6 +9,10 @@ related:
 
 # Mix Transport Logos Storage Integration Plan
 
+## Direct compatibility review — 16 September 2026
+
+Direct-only downloads must preserve master's original behavior and benchmark performance. Keep the current protocol connection handling and mounted `dispatchProtocol`; isolate behavioral variation through small injected policies rather than duplicating protocol or engine types. The first increment restores master's presence-peer selection for both transports by default, while retaining provider prioritization and provider-only eligibility as explicit experiments. The second increment restores querying after failed swarm admission by default and retains admission-only querying as an independent opt-in. The third increment removes explicit Direct registration after connecting and restores Switch-event ownership of registration. No alternate lifecycle policy is retained. The fourth increment restores passing complete provider address lists to libp2p in both Direct protocols, without a filtering policy. Download-ID-bound streaming readers are retained as an explicitly accepted shared correctness correction, including for two Direct downloads of the same tree. Next: review discovery/background reuse isolation and remaining bookkeeping overhead. Advertisement preservation through later mappers and the announced-address bypass is a separate follow-up recorded in the behavioral-changes note. Decisions and rationale are recorded in [[BlockExchange Mix Integration - Behavioral Changes and Experiments]].
+
 ## Baseline after PR 1526 — 12 September 2026
 
 This note is the working plan for integrating MixTransport with manifest fetching and BlockExchange. The generic transport is already implemented; the remaining work concerns how Storage selects that transport, discovers suitable providers, and manages peers for individual downloads. The current implementation walkthrough is [[Mix Transport Logos Storage Integration - Download Transport Selection]]; [[Mix Transport Logos Storage Integration Example]] retains the earlier reference example. Planned behavior below must not be mistaken for behavior already available.

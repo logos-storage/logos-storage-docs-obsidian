@@ -5,6 +5,7 @@ related:
   - "[[Mix Transport Logos Storage Integration Example]]"
   - "[[Block Exchange Peer Stores]]"
 ---
+
 # Direct and Mix downloads
 
 This walkthrough follows a download from the REST transport choice to manifest retrieval, provider selection, BlockExchange connections, and the stream returned to the caller. The connection-management sections explain the protocol instances that carry that work. File paths are relative to the Storage repository unless stated otherwise. Excerpts retain function signatures and identify omitted code; they are reading aids rather than standalone examples.
@@ -601,7 +602,7 @@ func mixAddresses*(
 
 The Mix connection path rejects a provider if no validated Mix address remains. Otherwise, BlockExchange calls the address-aware `MixTransport.connect`, and manifest fetching calls the address-aware `MixTransport.dial`. The explicit destination supplies the final Mix hop; it does not have to be added to the relay pool. Subsequent streams can reuse the established session through the peer-ID overload.
 
-The Direct path removes Mix advertisements before passing addresses to the Switch. A provider with no ordinary address is not dialed by that path. An advertisement is contact information, not a guarantee of reachability or support for the requested application protocol; connection and stream establishment still report those failures.
+The Direct path passes the complete provider address list to the Switch, leaving address support and connection reuse to libp2p. An advertisement is contact information, not a guarantee of reachability or support for the requested application protocol; connection and stream establishment still report those failures.
 
 ### Fetching the manifest through the selected connection
 
@@ -626,10 +627,9 @@ proc fetchManifestFromPeer(
           "Error opening MixTransport manifest stream to " & $peer.peerId & ": " & error
         )
     else:
-      let addresses = directAddresses(peer.addresses.mapIt(it.address))
-      if addresses.len == 0:
-        return failure("Provider has no direct address")
-      conn = await self.switch.dial(peer.peerId, addresses, ManifestProtocolCodec)
+      conn = await self.switch.dial(
+        peer.peerId, peer.addresses.mapIt(it.address), ManifestProtocolCodec
+      )
 
     let cidBytes = cid.data.buffer
     var reqBuf = newSeqUninit[byte](2 + cidBytes.len)
@@ -688,6 +688,32 @@ if self.isMixDownload:
 
 This step obtains a session. A later BlockExchange send obtains an application stream through the connection provider described earlier. Keeping these steps separate lets discovery supply and validate the provider's addresses while subsequent sends reuse the established session.
 
+For Direct providers, the same procedure asks the Switch to establish a physical connection. This excerpt shows the Direct branch; the self/already-connected checks and Mix branch are omitted:
+
+```nim
+proc dialPeer*(self: BlockExcNetwork, peer: PeerRecord) {.async.} =
+  # Earlier checks and Mix branch omitted.
+  # Direct branch:
+  await self.switch.connect(peer.peerId, peer.addresses.mapIt(it.address))
+```
+
+Both Direct paths pass the provider's complete address list to libp2p in its original order. Libp2p can reuse an existing connection; when a new connection is needed, the dialer tries address candidates using transports that recognize them. TCP and QUIC require a full address-pattern match, and relay transport requires a terminal circuit-relay component, so a normal Mix advertisement is not an ordinary transport candidate. Direct dialing does not depend on the Mix advertisement being last. Connection reuse and failure handling remain libp2p's responsibility, including when the supplied list is empty.
+
+Direct peer registration comes from the Switch's `Joined` event, not from an additional registration call after `connect`. The event handler installed by `BlockExcNetwork.init` calls:
+
+```nim
+proc handlePeerJoined*(
+    self: BlockExcNetwork, peer: PeerId
+) {.async: (raises: [CancelledError]).} =
+  if peer in self.excludedPeers:
+    return
+  await self.registerPeer(peer)
+```
+
+This check excludes configured relay identities from Direct BlockExchange registration. For an allowed peer, `registerPeer` creates or reuses the protocol's peer object and invokes `onPeerJoined`; the engine's callback creates a peer context if one does not already exist. An existing physical connection does not necessarily produce another `Joined` event when reused. Provider dialing therefore relies on the existing event-managed peer state rather than promising a new registration notification on every call.
+
+Mix uses its separate session-event callback for the corresponding registration. Establishing a physical connection to a Mix relay is not a Mix application-peer event.
+
 ## Discovery and swarm admission
 
 Discovery requests are keyed by `(CID, transport)`. Requests for the same CID over different transports can therefore both establish their intended connection type. This key controls provider dialing, not the DHT lookup mechanism itself.
@@ -719,11 +745,132 @@ proc discoveryTaskLoop(b: DiscoveryEngine) {.async: (raises: []).}
 
 For each queued key, the loop calls `b.discovery.find(key.cid)`. Once provider records arrive, the loop chooses `b.networks.networkFor(key.transport)` for their `dialPeer` calls and waits for those attempts to finish. The underlying discovery call does not receive `key.transport`: direct versus private DHT queries remain governed by discovery's own configuration.
 
-After dialing the returned providers, the discovery engine calls `onProviders`. The engine constructor registers the following discovery callback. Its parameters identify the discovered CID, the requested transport, and the returned provider records:
+### Selecting peers for presence queries
+
+The engine uses a `PresencePeerSelectionPolicy` to choose which connected peers to ask about content availability. The policy receives the peer store already selected for the download's transport. The policy does not choose a transport, dial a connection, or change the swarm's admission rules.
+
+`BlockExcEngine.new` accepts one policy for Direct and one for Mix. Both default to the original selection procedure. These parameters are separate from `selectionPolicy`, which controls block scheduling rather than peer selection:
+
 ```nim
+proc new*(
+    T: type BlockExcEngine,
+    localStore: BlockStore,
+    networks: BlockExcNetworks,
+    discovery: DiscoveryEngine,
+    advertiser: Advertiser,
+    peerStore: PeerContextStore,
+    downloadManager: DownloadManager,
+    selectionPolicy = spSequential,
+    directPeerSelectionPolicy: PresencePeerSelectionPolicy =
+      newPresencePeerSelectionPolicy(),
+    mixPeerSelectionPolicy: PresencePeerSelectionPolicy =
+      newPresencePeerSelectionPolicy(),
+    directPresenceQueryPolicy: PresenceQueryPolicy = PresenceQueryPolicy.QuerySelectedPeers,
+    mixPresenceQueryPolicy: PresenceQueryPolicy = PresenceQueryPolicy.QuerySelectedPeers,
+): BlockExcEngine
+```
+
+Normal Storage construction omits both peer-policy arguments. An experiment can supply `mixPeerSelectionPolicy = newProviderPriorityPolicy()` without changing the Direct policy. The arguments are constructor configuration, not additional REST query parameters.
+
+The default implementation is in `engine/peerselection.nim`. Its initial-query operation collects all peers in the supplied store. Only an oversized list is shuffled and truncated:
+
+```nim
+method selectInitialPresencePeers*(
+    policy: PresencePeerSelectionPolicy,
+    peers: PeerContextStore,
+    providers: HashSet[PeerId],
+    limit: int,
+): seq[PeerContext] {.base, gcsafe, raises: [].} =
+  result = peers.toSeq()
+  if result.len > limit:
+    shuffle(result)
+    result.setLen(limit)
+```
+
+The `providers` argument contains discovered provider identities when the configured policy requests that information. The default policy ignores that argument: a connected peer need not already be listed as a provider before BlockExchange asks whether the peer has content. With a Mix peer store, this includes peers reachable through established Mix sessions. Their content availability is still determined by presence responses.
+
+The later-query operation deliberately has no initial-selection limit and performs no shuffle:
+
+```nim
+method selectPresencePeers*(
+    policy: PresencePeerSelectionPolicy,
+    peers: PeerContextStore,
+    providers: HashSet[PeerId],
+): seq[PeerContext] {.base, gcsafe, raises: [].} =
+  peers.toSeq()
+```
+
+These are two distinct operations because the initial and later broadcasts have different selection behavior. Both return candidates; the engine retains responsibility for sending the queries.
+
+### Where the worker invokes the policy
+
+`downloadWorker` selects the policy once from the engine's transport-indexed policy array. The following excerpt shows the initial call and the later call in the batch loop; other scheduling operations are omitted:
+
+```nim
+proc downloadWorker(
+    self: BlockExcEngine, download: ActiveDownload
+) {.async: (raises: []).} =
+  let
+    peers = self.peersFor(download.ctx.transport)
+    peerSelection = self.peerSelectionPolicies[download.ctx.transport]
+  # Other worker state and logging omitted.
+  try:
+    let maxSwarmPeers = download.ctx.swarm.config.deltaMax
+    let connectedPeers = peerSelection.selectInitialPresencePeers(
+      peers, download.ctx.providerPeers, maxSwarmPeers
+    )
+    # Initial broadcast or discovery follows.
+    # Inside the batch loop, when another presence broadcast is needed:
+    if shouldBroadcast:
+      let connectedPeers = peerSelection.selectPresencePeers(
+        peers, download.ctx.providerPeers
+      )
+      # Broadcast or discovery/retry follows.
+  # Exception handling omitted.
+```
+
+This keeps the download procedure shared. A policy changes the candidate list, while the existing worker controls when queries are needed and how their responses are used.
+
+### Optional provider prioritization
+
+`ProviderPriorityPolicy` derives from `PresencePeerSelectionPolicy` and overrides the selection operations. Its constructor is:
+
+```nim
+proc newProviderPriorityPolicy*(providersOnly = false): ProviderPriorityPolicy =
+  ProviderPriorityPolicy(providersOnly: providersOnly)
+```
+
+With the default `providersOnly = false`, the policy puts discovered providers first and then appends other peers in store order. Passing `providersOnly = true` explicitly excludes those other peers. Neither setting is selected automatically for Mix.
+
+The initial operation truncates the prioritized list without shuffling it, preserving provider priority. The later operation returns the entire eligible list. Prioritization and provider-only eligibility therefore remain available for experiments without modifying the default policy.
+
+### Provider information is tracked only when needed
+
+The policy also declares whether it needs discovery results:
+
+```nim
+method needsProviderTracking*(
+    policy: PresencePeerSelectionPolicy
+): bool {.base, gcsafe, raises: [].} =
+  false
+
+method needsProviderTracking*(
+    policy: ProviderPriorityPolicy
+): bool {.gcsafe, raises: [].} =
+  true
+```
+
+After dialing discovered providers, discovery invokes `onProviders` only if a callback is installed. The engine constructor installs that callback only when at least one configured policy needs provider tracking. With both default policies, no callback is installed: discovery does not scan active downloads or populate their provider sets.
+
+When a callback is needed, it first checks the policy for the transport that requested discovery. For example, enabling provider priority for Mix does not make Direct discovery populate provider sets. The callback then updates matching downloads:
+
+```nim
+# Nested callback installed by BlockExcEngine.new when tracking is needed.
 discovery.onProviders = proc(
     cid: Cid, transport: DownloadTransport, providers: seq[PeerRecord]
 ) {.gcsafe, raises: [].} =
+  if not self.peerSelectionPolicies[transport].needsProviderTracking:
+    return
   for downloads in self.downloadManager.downloads.values:
     for download in downloads.values:
       if download.manifestCid == cid and download.ctx.transport == transport:
@@ -733,42 +880,53 @@ discovery.onProviders = proc(
             download.ctx.providerPeers.incl(provider.peerId)
 ```
 
-The callback updates only downloads with the matching manifest CID and transport. A returned record becomes a candidate only if its peer is present in the selected engine peer store. The worker's `candidatePeers` operation uses this recorded set.
+Only peers present in the selected engine peer store enter a download's recorded provider set. The provider policy uses that set to order or restrict candidates; the default policy does not depend on the set.
 
-The worker obtains its initial candidates through this procedure in `engine/engine.nim`:
+### Swarm admission after selection
+
+After selecting candidates, `broadcastWantHave` attempts to add each candidate to the download's swarm before sending the presence query. Admission can fail because the swarm is full or because that swarm has banned the peer. Failure to admit a peer does not necessarily mean that asking about the peer's content is undesirable: admission and querying are separate decisions.
+
+The engine constructor accepts `directPresenceQueryPolicy` and `mixPresenceQueryPolicy` independently of the candidate-selection policies. Both default to `PresenceQueryPolicy.QuerySelectedPeers`: attempt admission, but still query a new candidate if admission fails. An experiment can pass `mixPresenceQueryPolicy = PresenceQueryPolicy.QueryAdmittedPeers` to suppress those queries for Mix without changing Direct. This does not change swarm capacity or override bans.
+
+`broadcastWantHave` in `engine/engine.nim` chooses the query policy for the download's transport. The excerpt below shows the decision before sending; the message fields and timeout handling are omitted:
 
 ```nim
-  # Known providers are considered first. Other direct peers remain fallback
-  # probes; Mix downloads only probe providers discovered for their manifest.
-  let peers = self.peersFor(download.ctx.transport)
-  for peer in peers:
-    if peer.id in download.ctx.providerPeers:
-      result.add(peer)
-  if download.ctx.transport == DownloadTransport.Direct:
-    for peer in peers:
-      if peer.id notin download.ctx.providerPeers:
-        result.add(peer)
+proc broadcastWantHave(
+    self: BlockExcEngine,
+    download: ActiveDownload,
+    start: uint64,
+    count: uint64,
+    peers: seq[PeerContext],
+) {.async: (raises: [CancelledError]).} =
+  # Resolve the range address and selected protocol instance.
+  for peerCtx in peers:
+    if not download.addPeerIfAbsent(
+      peerCtx.id, BlockAvailability.unknown(),
+      self.presenceQueryPolicies[download.ctx.transport],
+    ):
+      continue
+    # Send the WantHave message through the selected protocol instance.
 ```
 
-The first loop admits only connected peers recorded as providers for this download. The second loop is conditional on Direct mode; it appends other Direct peers as fallback candidates.
-
-A Mix download probes only these content-specific providers. A Direct download retains the existing fallback of probing other direct peers when considering candidates, after known providers. This preserves existing direct transfers between connected nodes while preventing unrelated Mix sessions from becoming a Mix download's initial swarm.
-
-Selecting a candidate is not the same as admitting that peer into the swarm. Before sending a presence request, the caller uses `ActiveDownload.addPeerIfAbsent` in `engine/activedownload.nim`:
+The helper in `engine/activedownload.nim` performs the admission attempt. Its Boolean result means whether to send the query, not whether admission succeeded:
 
 ```nim
 proc addPeerIfAbsent*(
-    download: ActiveDownload, peerId: PeerId, availability: BlockAvailability
+    download: ActiveDownload,
+    peerId: PeerId,
+    availability: BlockAvailability,
+    queryPolicy: PresenceQueryPolicy = PresenceQueryPolicy.QuerySelectedPeers,
 ): bool =
   let existingPeer = download.ctx.swarm.getPeer(peerId)
   if existingPeer.isSome:
     # peer already tracked, skip if bakComplete
     return existingPeer.get().availability.kind != bakComplete
 
-  return download.ctx.swarm.addPeer(peerId, availability)
+  let admitted = download.ctx.swarm.addPeer(peerId, availability)
+  return queryPolicy == PresenceQueryPolicy.QuerySelectedPeers or admitted
 ```
 
-For a new peer, the returned Boolean is the swarm's admission result. If the swarm is full or refuses a previously removed peer, the caller does not send a presence request as though admission succeeded. For a peer already present, the helper allows further work unless availability is already complete.
+For an existing peer, both policies query again unless availability is already complete. For a new peer, both policies attempt admission exactly once. `QuerySelectedPeers` then permits the query regardless of the admission result; `QueryAdmittedPeers` permits it only when admission succeeds. Sending a query does not itself insert a rejected peer into the swarm. A subsequent response goes through the normal availability-update path described next.
 
 ### Applying presence to the matching downloads
 
@@ -795,7 +953,7 @@ The same handler can share the resulting availability with other downloads of th
 
 ## Streaming reads and shared local content
 
-The streaming REST endpoint passes the transport choice through `StorageNodeRef.retrieve` to `streamEntireDataset`. The latter creates a download and returns a `StoreStream` that reads blocks as they become available. Each missing-block read must wait on that particular download, because multiple downloads of the same tree can be running with different transport choices.
+The streaming REST endpoint passes the transport choice through `StorageNodeRef.retrieve` to `streamEntireDataset`. The latter creates a download and returns a `StoreStream` that reads blocks as they become available. Each missing-block read waits on that particular download. This matters both for simultaneous Direct/Mix downloads and for two Direct downloads of the same tree: another download's cancellation must not cancel this reader's pending block handle.
 
 The beginning of `streamEntireDataset` in `storage/node.nim` creates the download and a store view tied to its ID:
 
@@ -861,5 +1019,17 @@ The first branch selects the download by both ID and tree CID. The unscoped bran
 The local store is checked before waiting. A missing block causes a wait on the selected handle; another local-store error cancels that handle and returns the error. If no matching download remains, the operation only checks local content—it does not select a different download to replace the scoped one.
 
 The scoped view therefore follows its own download's scheduler and cancellation state. Callers that omit `downloadId` use the tree-CID lookup shown in the other branch.
+
+### Concurrent downloads and shared storage
+
+Starting a foreground streaming download creates a new `ActiveDownload` with its own ID, scheduler, and pending handles; it does not reuse another foreground download simply because the tree CID matches. Background downloads have a different entry point: `StorageNodeRef.startBackgroundDownload` first calls `getBackgroundDownload(treeCid, transport)` and returns an existing background download's ID when one matches. A background request does not thereby reuse an arbitrary foreground download. Direct and Mix background requests do not reuse each other's operations.
+
+The download-specific `NetworkStore` is a wrapper around the same local store, not a private cache. A block already present locally can satisfy either reader, regardless of which transport supplied it. The binding selects which download's future to await when the block is missing; it does not enforce the provenance of cached bytes.
+
+Each download worker checks local storage before requesting its next batch. This can avoid fetching blocks another download has already stored, but does not coalesce requests already in flight. Two downloads can therefore receive and validate the same block. The batch-processing path stores the block by CID and then stores its proof and block-CID mapping under `(treeCid, index)`. The transport choice is not part of either storage key.
+
+`RepoStore.storeBlock` reports `AlreadyInStore` for an existing block with matching size and retains the later expiry. `putLeafMetadata` retains existing metadata for the same tree position. `RepoStore.putBlock` updates storage accounting only for a newly stored block, and `putCidAndProof` increments the block reference count only for newly stored leaf metadata. These operations use the datastore's concurrency-aware `modifyGet` operation. Duplicate successful deliveries therefore reuse stored content; they can still incur network, validation, and metadata work.
+
+Completing one download's block handle does not broadcast completion to every download of the same tree. Another worker can discover the stored block through its local checks. A reader already waiting on its own handle remains tied to that download's progress and cancellation. Coalescing downloads would require explicit ownership and cancellation rules; sharing the local store alone does not implement it.
 
 Both transports still share the local content-addressed store. A verified block already available locally can satisfy either download without another network request. The selected transport governs network connections; it does not partition cached content by the route through which the content arrived.

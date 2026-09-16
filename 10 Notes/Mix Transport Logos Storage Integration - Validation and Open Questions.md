@@ -3,11 +3,24 @@ related:
   - "[[Mix Transport Logos Storage Integration Plan]]"
   - "[[Mix Transport Logos Storage Integration - Download Transport Selection]]"
 ---
+
 # Mix Transport integration: validation and open questions
 
-Updated: 2026-09-15. This is a live status note, separate from the implementation walkthrough.
+Updated: 2026-09-16. This is a live status note, separate from the implementation walkthrough.
 
 ## Recorded verification
+
+2026-09-16: retained the tree-only lookup diagnostic in the download-manager suite and strengthened the bound-reader regression to select the opposite download explicitly. Neither test assumes table iteration follows insertion order. The unbound test demonstrates cancellation coupling; the bound test demonstrates isolation. All 60 download-manager tests passed.
+
+2026-09-16: retaining download-ID-bound streaming readers passed all 59 download-manager tests, including two new Direct/Direct cancellation-isolation tests and the existing Direct/Mix handle-isolation test. Reader binding is an accepted shared correctness change relative to master's tree-only lookup. No production code changed in this increment. Concurrent storage behavior was inspected in source, not fault-injection tested; no benchmark equivalence is claimed.
+
+2026-09-16: restoring master-style Direct address forwarding passed 12 network tests, three Direct/Mix integration tests, and Storage's compile-only check. The integration provider list places a valid Mix advertisement before its ordinary endpoint. The unused Direct filtering helper and both empty-list rejections were removed; Mix validation is unchanged. This does not validate mapper ordering or final advertisement preservation; those remain separate follow-ups. Benchmarks and the full suite were not run.
+
+2026-09-16: removing explicit Direct provider registration passed 12 network tests and three Direct/Mix download-selection integration tests. The two new network tests use real Switch connections to verify a single registration notification and preservation of relay exclusion. Direct address filtering and Mix session registration were not changed. The full suite and benchmarks were not run.
+
+2026-09-16: the independent presence-query policies passed 131 engine tests and three Direct/Mix download-selection integration tests. Six focused tests cover full swarms, swarm bans, successful admission, and existing incomplete/complete peers. Storage's compile-only check also passed. Both transports default to master's query-after-failed-admission behavior; `QueryAdmittedPeers` is an explicit opt-in. These results do not establish benchmark equivalence or validate every remaining Direct-path difference.
+
+2026-09-16: the injected presence-peer selection policies passed 125 engine tests (including six focused policy tests) and three download-selection tests with real Mix traffic. The focused tests compare the default initial selection and random-number consumption with master's shuffle-and-truncate procedure. Both transports default to that policy; provider priority and provider-only eligibility are explicit constructor opt-ins. Default construction installs no provider-tracking callback. These checks do not establish benchmark equivalence or resolve the remaining Direct-path differences, including swarm-admission gating.
 
 2026-09-15: the independent Direct/Mix protocol-instance refactoring passed 9 network tests, 117 engine tests, 7 discovery tests, and 3 download-selection tests with real Mix traffic (136 tests total). Storage's compile-only check passed. The new network test confirms that the mounted dispatcher closes an incoming Mix stream when Mix is disabled without creating a Direct peer. The full Storage suite was not run.
 
@@ -48,6 +61,14 @@ Code inspection found separate codecs and credential ownership: MixTransport ret
 - A full Direct swarm can still need better replacement of low-value candidates with newly discovered providers.
 - AutoNAT address-mapper ordering and stale or unreachable advertisements remain independent concerns.
 - Previously observed high-concurrency harness stalls need investigation; transport selection alone does not explain or resolve them.
+
+## CacheStore duplicate-insert accounting — follow-up
+
+While reviewing simultaneous Direct/Direct and Direct/Mix downloads on 2026-09-16, source inspection identified an existing accounting bug in `storage/stores/cachestore.nim`, in `putBlockSync`: replacing an existing CID still increments `currentSize` by the block size. With sufficient free capacity, inserting the same block twice retains one entry but counts its bytes twice. The capacity check also treats replacement as a new insertion, potentially evicting other entries unnecessarily. Sequential duplicate inserts are enough; concurrent scheduling is not required.
+
+This code is unchanged from the reviewed master baseline. Normal node startup uses `RepoStore` for BlockExchange and Manifest storage, not `CacheStore`. CacheStore is used by tests, including the Direct/Mix integration fixture, and may be used by external consumers. This is not a normal-node RepoStore bug or a Mix integration blocker.
+
+Follow-up: add a duplicate-insert size/eviction regression test and correct replacement accounting in a separate increment. No fix or dedicated reproduction test has been added yet. This issue is separate from shared-block cleanup after proof-storage failure.
 
 ## Document ownership
 
