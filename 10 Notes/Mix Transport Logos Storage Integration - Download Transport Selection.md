@@ -26,6 +26,8 @@ Direct is the default, including on a node with Mix enabled. The network downloa
 - `GET /api/storage/v1/data/{cid}/network/stream` streams the dataset.
 - `GET /api/storage/v1/data/{cid}/network/manifest` fetches only the manifest.
 
+Transport selection and content advertisement are separate choices. The network endpoints also parse `advertise` (default `true`); choosing `transport=mix` does not implicitly change that flag. The manifest-fetch operation receives both choices.
+
 The REST endpoints call the parser in `storage/downloadtransport.nim`:
 ```nim
 func parseDownloadTransport*(value: string): Result[DownloadTransport, string] =
@@ -57,7 +59,13 @@ router.api(MethodPost, "/api/storage/v1/data/{cid}/network") do(
     return RestApiResponse.error(Http400, error, headers = headers)
 
   # CID validation omitted.
-  without manifest =? (await node.fetchManifest(cid.get(), transport)), err:
+  let advertise =
+    try:
+      parseBool(request.query.getString("advertise", "true"))
+    except ValueError as exc:
+      return RestApiResponse.error(Http400, exc.msg, headers = headers)
+
+  without manifest =? (await node.fetchManifest(cid.get(), advertise, transport)), err:
     return RestApiResponse.error(Http404, err.msg, headers = headers)
 
   let md = ManifestDescriptor(manifest: manifest, manifestCid: cid.get())
@@ -78,6 +86,7 @@ The node's manifest entry point delegates to `ManifestProtocol`:
 proc fetchManifest*(
     self: StorageNodeRef,
     cid: Cid,
+    advertise: bool = true,
     transport: DownloadTransport = DownloadTransport.Direct,
 ): Future[?!Manifest] {.async: (raises: [CancelledError]).}
 ```
@@ -205,7 +214,7 @@ proc new*(
     directNetwork = BlockExcNetwork.new(switch)
     networks = newBlockExcNetworks(directNetwork)
     # Store and supporting service construction omitted.
-    blockDiscovery = DiscoveryEngine.new(repoStore, peerStore, networks, discovery)
+    blockDiscovery = DiscoveryEngine.new(peerStore, networks, discovery)
     engine = BlockExcEngine.new(
       repoStore, networks, blockDiscovery, advertiser, peerStore, downloadManager
     )
@@ -393,7 +402,7 @@ func networkFor*(
   of DownloadTransport.Mix: self.mix
 ```
 
-A missing Mix instance returns nil, not Direct. The engine rejects a new Mix download when Mix is unavailable, and discovery skips provider dialing if the selected instance is absent.
+A missing Mix instance returns nil, not Direct. The engine rejects a new Mix download when Mix is unavailable, and discovery skips provider dialing if the selected instance is absent. Within `requestWantBlocks` and the presence-response path, a configured selected network is an invariant checked with `doAssert`, not a silent fallback. Normal lifecycle ordering keeps the Mix instance alive until transport sessions have shut down; disabling it then cancels remaining tracked message handlers.
 
 Once an instance is selected, its peer's connection provider calls either `Switch.dial` or `MixTransport.dial`. The later section “Sending replies from the anonymous recipient” shows that callback and follows sending-connection reuse.
 
@@ -716,7 +725,20 @@ Mix uses its separate session-event callback for the corresponding registration.
 
 ## Discovery and swarm admission
 
-Discovery requests are keyed by `(CID, transport)`. Requests for the same CID over different transports can therefore both establish their intended connection type. This key controls provider dialing, not the DHT lookup mechanism itself.
+Discovery requests are keyed by `(CID, transport)`. Requests for the same CID over different transports can therefore both establish their intended connection type. This key controls provider dialing, not the DHT lookup mechanism itself. The engine’s `lastDiscRequest` rate-limit timestamp is shared across Direct and Mix; the key does not give each transport a separate engine rate budget.
+
+Before queueing discovery, `BlockExcEngine.searchForNewPeers` applies a shared three-second cooldown to calls through this helper:
+
+```nim
+proc searchForNewPeers(self: BlockExcEngine, cid: Cid, transport: DownloadTransport) =
+  if self.lastDiscRequest + DiscoveryRateLimit < Moment.now():
+    trace "Searching for new peers for", cid = cid
+    storage_block_exchange_discovery_requests_total.inc()
+    self.lastDiscRequest = Moment.now()
+    self.discovery.queueFindBlocksReq(@[cid], transport)
+```
+
+A call during the cooldown does not enqueue a request; the worker must try again later. This is not a global limiter for every DHT operation, such as independent manifest lookups. The queued key still retains its transport for provider dialing.
 
 The queued request type and insertion operation in `engine/discovery.nim` are:
 
@@ -879,6 +901,8 @@ discovery.onProviders = proc(
           if provider.peerId in self.peersFor(transport):
             download.ctx.providerPeers.incl(provider.peerId)
 ```
+
+The set is replaced on each matching discovery callback, not accumulated across queries. A peer omitted from the latest result loses provider-priority status; it is not removed from the transport peer store by this update. With providersOnly enabled, omission also removes it from that policy's candidate list. Both default policies ignore this set, and do not install the tracking callback.
 
 Only peers present in the selected engine peer store enter a download's recorded provider set. The provider policy uses that set to order or restrict candidates; the default policy does not depend on the set.
 

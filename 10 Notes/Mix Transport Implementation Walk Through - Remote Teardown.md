@@ -21,7 +21,7 @@ The wire protocol distinguishes normal completion from an immediate abort at bot
 | `Disconnect` | Remove an otherwise idle session after its streams have closed |
 | `ResetSession` | Abort the session and every stream that remains inside it |
 
-All four notifications are best effort. Local cleanup does not depend on the remote endpoint receiving the notification. A lost notification can therefore leave remote state alive until another reliability or liveness mechanism removes it; teardown-frame retransmission is not part of this increment.
+All four notifications are best effort. Local cleanup does not depend on the remote endpoint receiving the notification. A lost notification can therefore leave remote state alive until another reliability or liveness mechanism removes it; teardown frames are not retransmitted.
 
 ## 2. A normal libp2p close emits `CloseStream`
 
@@ -180,7 +180,7 @@ proc disconnect*(
 
 `Disconnect` can overtake a preceding `CloseStream` on the remote endpoint. The receiver therefore records `remoteDisconnectRequested` when streams remain instead of destroying them. Both local stream cleanup and remote stream cleanup check this flag after removing a stream. The endpoint finishes the remote disconnect when the final registered stream has gone.
 
-`TransportSession.waitUntilClosed` exposes the session's `closedEvent`. Tests and future integration code can wait for actual session teardown without polling:
+`TransportSession.waitUntilClosed` exposes the session's `closedEvent`. Callers can wait for actual session teardown without polling:
 
 ```nim
 proc waitUntilClosed*(
@@ -194,13 +194,3 @@ proc waitUntilClosed*(
 `resetSession` sends `ResetSession` on a best-effort basis and then removes the local session regardless of the send result. On receipt, `TransportSession.receiveRemoteReset` marks every registered stream as remotely reset before session shutdown closes those streams. A blocked read on any affected stream consequently wakes with `LPStreamResetError` through the `readOnce` override.
 
 `MixTransport.stop` detaches every session, attempts one `ResetSession` notification while the Mix delivery handlers are still registered, unregisters those handlers, and waits for local session shutdown. `TransportSession.shutdown` suppresses individual stream notifications because the session-level reset already represents the complete subtree. The transport clears reply credentials only after the session and stream shutdown operations have completed.
-
-## 8. Tests cover the semantic boundaries
-
-`tests/test_wire.nim` verifies that `CloseStream` survives a Protobuf round trip with `finalSequence`, and that the validator rejects both a missing final sequence and a final sequence attached to `ResetStream`.
-
-`tests/test_streams.nim` delivers Data sequence `2` before sequence `1` after recording a remote final sequence of `2`. The test confirms that the close condition remains false until both payloads have advanced through the ordered receive path. A separate test blocks in `readOnce`, applies a remote reset and verifies that the pending read raises `LPStreamResetError`.
-
-`tests/test_connect.nim` exercises graceful teardown through five live Mix nodes. After the request and response have crossed the virtual connection, the initiator closes its `TransportStream` and waits for the recipient's matching stream to close. The initiator then calls `disconnect` and waits for the recipient session's `closedEvent`. Both session stream tables are empty before the surrounding test fixture stops either transport.
-
-The same test module also dispatches `ResetSession` through the registered Mix delivery handler. The test confirms that the recipient removes the session, closes its stream and wakes a blocked stream read with `LPStreamResetError`.

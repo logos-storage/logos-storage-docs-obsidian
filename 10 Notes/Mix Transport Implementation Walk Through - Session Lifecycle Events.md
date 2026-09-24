@@ -183,17 +183,3 @@ The common helper is used by:
 `dial` and incoming `OpenStream` handling create `TransportStream` objects inside an established session. Opening or closing one of these streams does not change the application peer represented by the session, so stream operations do not publish `SessionEvent`.
 
 This distinction is important for consumers such as block exchange. Two independent block-exchange streams to the same destination still belong to one transport peer. The consumer removes that peer only when the complete session publishes `Closed`.
-
-## Test coverage
-
-`tests/test_lifecycle.nim` verifies that duplicate handler registration is idempotent and that a registered handler can be removed.
-
-The live five-node test in `tests/test_connect.nim` registers handlers on both endpoint transports before the handshake. The test verifies:
-
-- one initiator `Established` event whose `peerId` is the real destination;
-- one recipient `Established` event whose `peerId` is the session pseudonym;
-- no additional establishment event when `connect(destination)` reuses the session;
-- one `Closed` event on each endpoint after the initiator disconnects;
-- stable `sessionId` and `role` fields across each endpoint's establishment and closure events.
-
-The BlockExchange adapter and the required replacement of raw Switch peer membership are described in [[Mix Transport Block Exchange Integration - Session Events]].

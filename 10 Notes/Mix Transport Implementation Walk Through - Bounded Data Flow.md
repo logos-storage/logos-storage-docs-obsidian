@@ -16,7 +16,7 @@ The implementation is divided across four modules:
 - `sessions.nim` owns the recipient's bounded queue of individual SURBs, numbered supply state, liveness-probe timing and the lock that serializes return sends within one session.
 - `transport.nim` connects the standard libp2p `Connection` methods to those state machines. The module selects forward Mix delivery for frames sent by the session initiator and SURB delivery for frames sent by the session recipient.
 
-The current implementation bounds memory, propagates application backpressure, retransmits unacknowledged Data and replenishes recipient SURBs through an initiator-driven push mechanism. Data retransmission is enabled by default and can be disabled when constructing `MixTransport`. SURB replenishment is always active. The transport does not yet probe a stalled Data receive window when every ACK carrying the advanced window has been lost.
+The current implementation bounds memory, propagates application backpressure, retransmits unacknowledged Data and replenishes recipient SURBs through an initiator-driven push mechanism. Data retransmission is enabled by default and can be disabled when constructing `MixTransport`. SURB replenishment is always active. The transport does not probe a stalled Data receive window when every ACK carrying the advanced window has been lost.
 
 ## The State Behind One Virtual Connection
 
@@ -269,7 +269,7 @@ const
 let MaxDataPayloadBytes* = MaxTransportFrameBytes - MaxDataFrameOverheadBytes
 ```
 
-The expression uses `sizeof(StreamId)`, `sizeof(SequenceNumber)` and `sizeof(SurbSupplySequence)` rather than hard-coded numeric widths. Changing an alias and retaining fixed-width Protobuf encoding therefore updates the calculated payload bound automatically. The frame validator independently rejects a larger payload, and `encode` retains the final complete-frame size check. The wire-format test verifies that the small and largest identifiers produce the same length, that recipient Data carrying a complete supply snapshot reaches `MaxTransportFrameBytes`, and that one additional payload byte is rejected. This test makes a future frame-layout change fail visibly if the overhead expression is not updated.
+The expression uses `sizeof(StreamId)`, `sizeof(SequenceNumber)` and `sizeof(SurbSupplySequence)` to account for their fixed-width representation. The frame validator rejects a larger payload, and `encode` independently checks the complete encoded frame size.
 
 ## 4. A Sequence Is Assigned and the Chunk Is Retained
 
@@ -363,11 +363,7 @@ proc sendStreamFrame(
       return err("could not encode " & $frame.kind & " frame: " & error)
     let destination = session.destination.valueOr:
       return err("initiator session has no destination")
-    (
-      await self.mix.send(
-        MixDestination.exitNode(destination), MixTransportCodec, payload
-      )
-    ).isOkOr:
+    (await self.sendToDestination(destination, session.sessionId, payload)).isOkOr:
       return err("could not send " & $frame.kind & " frame: " & error)
   of SessionRole.Recipient:
     await session.acquireReplySend()
@@ -809,82 +805,9 @@ proc stop*(self: MixTransport): Future[void] {.async: (raises: [CancelledError])
   self.started = false
 ```
 
-Stream and session teardown now use `CloseStream`, `ResetStream`, `Disconnect` and `ResetSession`. Graceful stream closure carries a final Data sequence so an out-of-order close cannot discard preceding Data, while reset remains immediate. [[Mix Transport Implementation Walk Through - Remote Teardown]] explains the complete send, receive, task-cancellation and `readOnce` reset paths. This note retains the task-ownership context because those tasks implement bounded Data flow, but the teardown walk-through is the source for lifecycle behavior.
+Stream and session teardown use `CloseStream`, `ResetStream`, `Disconnect` and `ResetSession`. Graceful stream closure carries a final Data sequence so an out-of-order close cannot discard preceding Data, while reset remains immediate. [[Mix Transport Implementation Walk Through - Remote Teardown]] explains the complete send, receive, task-cancellation and `readOnce` reset paths. This note retains the task-ownership context because those tasks implement bounded Data flow, but the teardown walk-through is the source for lifecycle behavior.
 
-## The Tests as an Executable Walkthrough
 
-The tests cover the flow at three different boundaries. `tests/test_streams.nim` tests receive-window state without a live Mix network. `tests/test_wire.nim` tests the Protobuf representation accepted by both endpoints. `tests/test_connect.nim` runs the application-visible exchange through five live Mix nodes.
+## Reliability Boundaries
 
-The test named `the acknowledgement bitmap retains and orders received chunks` creates one established inbound stream and calls `receiveData` directly. The test inserts sequence `2` before sequence `1`. Because `pendingInbound` does not yet contain the current `receiveBase`, `takeNextInbound` must return `none`. After sequence `1` arrives, the test verifies that a repeated sequence `2` is classified as a duplicate and that both original payloads are delivered in order:
-
-```nim
-test "the acknowledgement bitmap retains and orders received chunks":
-  # Session and stream construction omitted from this excerpt.
-  check:
-    stream.receiveData(2, @[2'u8]) == InboundDataDisposition.Accepted
-    stream.takeNextInbound().isNone
-    stream.receiveData(1, @[1'u8]) == InboundDataDisposition.Accepted
-    stream.receiveData(2, @[2'u8]) == InboundDataDisposition.Duplicate
-
-  var first = stream.takeNextInbound().expect("sequence 1 was not ready")
-  stream.advanceReceiveWindow(first.sequence)
-  var second = stream.takeNextInbound().expect("sequence 2 was not ready")
-  stream.advanceReceiveWindow(second.sequence)
-
-  check:
-    stream.receiveBase == 3
-    stream.pendingInboundCount == 0
-```
-
-The test named `acknowledgement bitmap has the fixed receive-window size` constructs an `Ack` frame, encodes and decodes it, and compares the decoded base and bitmap with the original values. It then replaces the bitmap with a value one byte shorter than `AckBitmapBytes` and verifies that frame validation rejects it:
-
-```nim
-test "acknowledgement bitmap has the fixed receive-window size":
-  # Valid frame construction and round trip omitted from this excerpt.
-  var wrongSize = frame
-  wrongSize.acknowledgementBitmap = Opt.some(newSeq[byte](AckBitmapBytes - 1))
-  check wrongSize.encode().isErr
-```
-
-The component test in `tests/test_connect.nim` starts an initiator-side `MixTransport`, a recipient-side `MixTransport` and the five-node live Mix overlay between them. After the `Connect` and `OpenStream` round trips complete, the initiator writes a length-prefixed request through the standard libp2p connection API:
-
-```nim
-await initiatorStream.writeLp(TestRequest)
-```
-
-On the recipient, the mounted protocol handler receives the established inbound `TransportStream`. The handler reads the request from that stream and writes a response through the same connection object:
-
-```nim
-let request = await stream.readLp(1024)
-await requests.put(request)
-await stream.writeLp(TestResponse)
-```
-
-The response is divided into transport Data frames. For each frame, the recipient forms a temporary redundancy batch from its queue of individual SURBs and sends the frame through every SURB in that batch. The initiator reorders the recovered frames, feeds the reconstructed bytes into its `BufferStream`, and completes the pending `readLp`:
-
-```nim
-let receivedResponseFuture = initiatorStream.readLp(1024)
-if not await receivedResponseFuture.withTimeout(TestOperationTimeout):
-  raise newException(LPError, "initiator did not receive stream response")
-let receivedResponse = await receivedResponseFuture
-```
-
-This exchange exercises both directions explicitly. Initiator Data travels through forward Mix delivery, and the recipient returns its ACK through a temporary batch of individual SURBs. Recipient Data travels through another temporary SURB batch, and the initiator returns its ACK through forward Mix delivery. Before the stream opens, the test waits for initiator-driven numbered supply to fill the recipient's advertised capacity. `TestOperationTimeout` is a failure guard for operations that never complete; successful synchronization comes from transport handshakes, queue notifications and stream reads rather than fixed sleeps.
-
-After the request and response have completed, the same live test closes the initiator stream and waits on the recipient stream's `join` future. It then calls `disconnect` and waits for the recipient session's `closedEvent`. The test therefore verifies that the bounded Data path hands control to graceful stream and session teardown without relying on fixture shutdown.
-
-## Remaining Reliability Work
-
-The implemented flow bounds memory and carries application bytes in both directions, but it does not yet guarantee recovery from every packet-loss pattern. The following mechanisms remain to be added:
-
-- Data retransmission currently uses one fixed timeout and retries without a retry-count limit. The transport does not estimate RTT, apply exponential backoff or close a stream after a configured number of unsuccessful retries.
-
-- Receiving duplicate Data causes the receiver to send its latest absolute ACK again, which recovers when the Data arrived but the preceding ACK was lost. If submitting an ACK itself returns an error, `runAcknowledgements` currently exits, so later changes to the receive window no longer produce ACKs on that stream.
-
-- A sender stops allocating new sequences when `nextOutboundSequence` reaches the remote receive-window limit. If the receiver advanced its window but every ACK carrying the new `receiveBase` was lost, the sender has no persist probe: it does not periodically send a small control frame that prompts the receiver to repeat its current window information.
-
-- Every accepted chunk, duplicate and `receiveBase` advancement currently wakes the ACK task immediately. A delayed-ACK policy could combine state changes that occur within a short interval and reduce Mix-packet and SURB consumption, but no delay timer or threshold policy is implemented.
-
-- Teardown notifications are best effort and are not retransmitted or acknowledged. A lost `CloseStream`, `ResetStream`, `Disconnect` or `ResetSession` can therefore leave remote state alive until another liveness mechanism removes it.
-
-These additions affect transport scheduling and lifecycle management. They do not require changing the application-facing `Connection` API, and the retransmission and delayed-ACK work can continue to use the existing sequence numbers, `receiveBase` and fixed acknowledgement bitmap.
+Data retries use a fixed timeout with no retry-count limit. A failed ACK submission ends that stream’s ACK task; outstanding duplicate Data can prompt another ACK only while that task is active. There is no Data-window persist probe when all outstanding chunks have been acknowledged but window-advancing ACKs are lost. Teardown notifications are best effort. These limits are part of the behavior described in [[Mix Transport Design Specification]], not guarantees of recovery from every loss pattern.

@@ -5,13 +5,13 @@ related:
   - "[[Mix Transport Implementation Walk Through - Stream Establishment Round Trip]]"
   - "[[Mix Transport Implementation Walk Through - Bounded Data Flow]]"
 ---
-This phase turns each established `TransportStream` into the libp2p connection object used by an application protocol. When the recipient accepts `OpenStream`, MixTransport now passes that same stream object to the handler of the mounted protocol selected by the frame's codec. The handler can therefore use the ordinary libp2p `Stream` and `Connection` interface rather than a Mix-specific callback API.
+Each established `TransportStream` is the libp2p connection object used by an application protocol. When the recipient accepts `OpenStream`, MixTransport passes that same stream object to the handler of the mounted protocol selected by the frame's codec. The handler can therefore use the ordinary libp2p `Stream` and `Connection` interface rather than a Mix-specific callback API.
 
-The connection is now active in both directions. `TransportStream.write` delegates to MixTransport's chunking and send path, while the stream's delivery task feeds ordered incoming Data into the inherited `BufferStream`. This note concentrates on the application-facing connection and protocol dispatch; [[Mix Transport Implementation Walk Through - Bounded Data Flow]] follows the byte and acknowledgement paths in detail.
+The connection is active in both directions. `TransportStream.write` delegates to MixTransport's chunking and send path, while the stream's delivery task feeds ordered incoming Data into the inherited `BufferStream`. This note concentrates on the application-facing connection and protocol dispatch; [[Mix Transport Implementation Walk Through - Bounded Data Flow]] follows the byte and acknowledgement paths in detail.
 
 ## One Object Represents the Transport Stream and the libp2p Connection
 
-`TransportStream` now inherits from libp2p's `BufferStream`, which inherits from `Connection`. This avoids creating a wrapper around the stream registry entry. Session lookup, transport state, application reads and the object passed to the protocol handler all refer to the same instance.
+`TransportStream` inherits from libp2p's `BufferStream`, which inherits from `Connection`. This avoids creating a wrapper around the stream registry entry. Session lookup, transport state, application reads and the object passed to the protocol handler all refer to the same instance.
 
 Construction initializes both sets of fields. The MixTransport fields retain `sessionId`, `streamId`, codec, transport direction and establishment state. The inherited libp2p fields expose `peerId`, `protocol`, `dir` and the buffered read implementation. `BufferStream.initStream()` initializes the read queue, close event, object identifier and libp2p stream bookkeeping.
 
@@ -24,13 +24,15 @@ recipient TransportStream.peerId = sessionId
 
 Every stream in one session exposes the same recipient-side pseudonym. The pseudonym changes only when that session is removed and a later connection creates another session. MixTransport does not register these virtual connections with the Switch connection manager, peer store, dialer or muxer, so the session ID does not enter libp2p's global connection state. The inherited stream initialization uses it only as connection metadata, while protocol admission control uses it as a per-peer counter key.
 
-The protocol stream metrics are labelled by protocol and direction, not by peer ID, so a new time series is not created for every session. Libp2p's per-peer admission table removes the pseudonym when its last reserved stream is released. Identifier-space exhaustion is not a practical constraint; the separate recipient-session store still needs an explicit capacity and teardown policy so retained session state cannot grow without limit.
+The protocol stream metrics are labelled by protocol and direction, not by peer ID, so a new time series is not created for every session. Libp2p's per-peer admission table removes the pseudonym when its last reserved stream is released. Identifier-space exhaustion is not a practical constraint; there is no global runtime session-count limit, so deployments must also account for aggregate session resources.
 
-The connection's standard idle timeout is disabled with `ZeroDuration`. MixTransport owns flow control and will add retransmission and idle policy at its session and stream layers instead of allowing the base `Connection` timer to close a virtual stream independently of its remote endpoint.
+The connection's standard idle timeout is disabled with `ZeroDuration`. MixTransport owns flow control, Data retransmission and session-level status probing instead of allowing the base `Connection` timer to close a virtual stream independently of its remote endpoint.
+
+The following example follows an initiator opening a stream at the recipient. A recipient can also open a stream within the same session; the accepting initiator performs the same protocol lookup and admission steps, while its response travels forward.
 
 ## Protocol Selection and Admission
 
-The recipient resolves the `OpenStream.codec` through `switch.ms.lookupProtocol`. This is the same mounted-protocol registry used by libp2p multistream and supports both exact codecs and registered matchers. If no protocol matches, the recipient sends `StreamReject` as described in the preceding phase.
+The recipient resolves the `OpenStream.codec` through `switch.ms.lookupProtocol`. This is the same mounted-protocol registry used by libp2p multistream and supports both exact codecs and registered matchers. If no protocol matches, the recipient sends `StreamReject` as described in [[Mix Transport Implementation Walk Through - Stream Establishment Round Trip]].
 
 Finding a protocol is not sufficient to accept the stream. MixTransport calls:
 
@@ -90,14 +92,8 @@ The handler is obtained through an explicitly typed `LPProtoHandler` binding bef
 
 ## Transport Teardown
 
-`MixTransport.stop` first unregisters the Mix delivery and raw-reply callbacks so no new work can enter. `takeSessions` then removes every session from both store indexes without yielding. Each detached session calls `takeStreams`, which removes all of its streams before asynchronous shutdown begins. Stream shutdown closes the buffered connection, requests cancellation of its handler and internal tasks, and waits for those tasks to finish. Cancellation therefore reaches handlers blocked in a connection read as well as ACK or Data-delivery tasks blocked inside a nested asynchronous operation.
+`MixTransport.stop` cancels connection attempts and detaches all sessions with `takeSessions`, which clears both indexes without yielding. It attempts a best-effort ResetSession for each detached session, unregisters the Mix delivery and raw-reply callbacks, and awaits session shutdown. Each session detaches its streams before awaiting their shutdown. Stream shutdown closes the buffered connection, cancels its handler and internal tasks, and waits for completion. Cancellation reaches both connection reads and nested asynchronous operations.
 
 Closing a pending session fires its `established` event. Closing a pending stream fires its `resolved` event. A concurrent `connect` or `dial` therefore resumes immediately and reports that the session or stream closed; the caller does not remain blocked until its establishment timeout expires.
 
-The ownership hierarchy now follows the lifetime of the represented objects: `MixTransport` owns sessions, each `TransportSession` owns its registered streams, and each `TransportStream` owns its handler invocation and internal tasks. MixTransport no longer keeps flat transport-wide handler and stream task collections.
-
-## Component Test
-
-The five-node component test mounts a protocol whose handler reports the stream and selected codec through an `AsyncQueue`, reads a length-prefixed request from the virtual connection, writes a length-prefixed response, and then waits on an `AsyncEvent` so that it remains active while the test inspects the connection. Queues, connection reads and the event provide explicit synchronization rather than sleeps.
-
-After `dial` receives `StreamAck`, the test verifies that the mounted handler was invoked with the exact recipient-side `TransportStream`, not a separate wrapper. It verifies the codec and peer-identity rules, then exchanges application bytes in both directions through `writeLp` and `readLp`. During teardown, cancelling the waiting handler exercises the tracked-task cleanup path.
+The ownership hierarchy follows the lifetime of the represented objects: `MixTransport` owns sessions, each `TransportSession` owns its registered streams, and each `TransportStream` owns its handler invocation and internal tasks.

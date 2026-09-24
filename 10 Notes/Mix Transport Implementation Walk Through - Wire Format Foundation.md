@@ -9,7 +9,7 @@ related:
 ---
 `libp2p_mix_transport/wire.nim` defines the Protobuf envelope exchanged by two MixTransport endpoints. The file is not merely a collection of data types: it is the boundary that rejects malformed combinations of fields before transport state is changed, converts public SURBs through Mix's canonical serialization API and calculates how much application data fits in one Sphinx packet.
 
-The tests are in `tests/test_wire.nim`. Package users obtain these public types through the root `libp2p_mix_transport.nim` facade.
+Package users obtain these public types through the root `libp2p_mix_transport.nim` facade.
 
 ## Service Identity and Sphinx Capacity
 
@@ -29,7 +29,7 @@ let MaxTransportFrameBytes* = getMaxMessageSizeForCodec(MixTransportCodec, 0).ex
 
 This calculates the Sphinx payload space left after the Mix service codec. The second argument is zero because MixTransport does not use the embedded legacy SURB envelope. When MixTransport needs public SURBs, it serializes them in its own control frames.
 
-## Frame Kinds and Their Current Status
+## Frame Kinds
 
 ```nim
 FrameKind* {.pure.} = enum
@@ -51,9 +51,9 @@ FrameKind* {.pure.} = enum
 
 The numeric values are explicit wire assignments. Existing values must not change if the enum is reordered, and a removed value must not be reused for another meaning.
 
-The implementation currently handles:
+Each kind has a defined responsibility:
 
-| Frames | Current responsibility |
+| Frames | Responsibility |
 | --- | --- |
 | `Connect`, `ConnectAck` | Establish and confirm a long-lived transport session |
 | `OpenStream`, `StreamAck`, `StreamReject` | Open or reject one virtual application stream |
@@ -95,7 +95,7 @@ Every frame carries `version`, `sessionId` and `kind`. `sessionId` is the initia
 | `sequence`, `payload` | `Data` |
 | `codec` | `OpenStream` |
 | `receiveBase`, `acknowledgementBitmap` | `Ack` |
-| `firstSurbSequence` | `SurbSupply`, and `Connect` when the frame carries numbered bootstrap supply after its two response SURBs |
+| `firstSurbSequence` | `SurbSupply`, and `Connect` or initiator-originated `OpenStream` when numbered supply follows the two response SURBs |
 | `surbSupplyReceiveBase`, `surbSupplyAcknowledgementBitmap`, `surbSupplyLimit` | complete snapshots on reverse frames, including stream and session teardown sent through SURBs |
 | `rejectionReason` | optionally `StreamReject` |
 | `surbs` | `Connect`, `OpenStream`, `SurbSupply` and `SurbStatusProbe` |
@@ -154,7 +154,7 @@ The common frame carries every public SURB as a separate repeated byte field:
 surbs* {.fieldNumber: 14.}: seq[seq[byte]]
 ```
 
-The wire format does not record persistent redundancy groups. In `Connect` and `OpenStream`, position gives the first two SURBs immediate-response semantics and gives any remaining SURBs numbered session-supply semantics. A standalone `SurbSupply` frame contains only numbered session supply. The recipient stores each accepted numbered SURB in one session queue and selects several queue entries only when it forms a temporary redundancy batch for one reverse frame. [[Mix Transport SURB Replenishment Strategy]] explains why ordinary redundancy is a send-time operation rather than persistent wire state.
+The wire format does not record persistent redundancy groups. In `Connect` and initiator-originated `OpenStream`, position gives the first two SURBs immediate-response semantics and gives any remaining SURBs numbered session-supply semantics. A standalone `SurbSupply` frame contains only numbered session supply. The recipient stores each accepted numbered SURB in one session queue and selects several queue entries only when it forms a temporary redundancy batch for one reverse frame. [[Mix Transport SURB Replenishment Strategy]] explains why ordinary redundancy is a send-time operation rather than persistent wire state.
 
 The sender converts each public SURB with `serializeSurb`. The receiver applies `deserializeSurb` independently to every repeated value. An invalid serialized SURB can therefore be discarded without rejecting valid SURBs carried by the same transport frame.
 
@@ -162,7 +162,7 @@ MixTransport does not reconstruct private SURB fields manually. Local encoding c
 
 ## Numbered SURB Supply and Absolute State
 
-The initiator begins numbered supply in `Connect` and continues the same sequence in standalone `SurbSupply` frames. `firstSurbSequence` identifies the first numbered SURB, and each later supply item has the next consecutive sequence:
+The initiator begins numbered supply in `Connect` and continues the same sequence in initiator-originated `OpenStream` and standalone `SurbSupply` frames. `firstSurbSequence` identifies the first numbered SURB, and each later supply item has the next consecutive sequence:
 
 ```nim
 MixTransportFrame(
@@ -242,8 +242,13 @@ require frame.receiveBase.isSome == (frame.kind == FrameKind.Ack),
   "receiveBase does not match the frame kind"
 require frame.finalSequence.isSome == (frame.kind == FrameKind.CloseStream),
   "finalSequence does not match the frame kind"
-require frame.firstSurbSequence.isSome == (frame.kind == FrameKind.SurbSupply),
-  "firstSurbSequence does not match the frame kind"
+let carriesNumberedSurbSupply =
+  frame.kind == FrameKind.SurbSupply or (
+    frame.kind in {FrameKind.Connect, FrameKind.OpenStream} and
+    frame.surbs.len > DefaultReplySurbRedundancy
+  )
+require frame.firstSurbSequence.isSome == carriesNumberedSurbSupply,
+  "firstSurbSequence does not match the supplied SURBs"
 require frame.surbSupplyReceiveBase.isSome == carriesSurbSupplyState and
   frame.surbSupplyAcknowledgementBitmap.isSome == carriesSurbSupplyState and
   frame.surbSupplyLimit.isSome == carriesSurbSupplyState,
@@ -260,7 +265,7 @@ require frame.acknowledgementBitmap.isNone or
   "acknowledgement bitmap has the wrong size"
 ```
 
-Kind-specific checks then reject empty Data, a `Connect` or `OpenStream` without two response SURBs, a handshake or standalone supply frame above its declared SURB capacity, an empty OpenStream codec, an overflowing supply sequence range and a status probe without a complete response redundancy batch.
+Kind-specific checks reject empty Data, a Connect without two response SURBs, frames above their SURB capacity, an empty OpenStream codec, an overflowing supply range, and a probe without a complete response batch. OpenStream permits zero SURBs or a dedicated response batch with an optional numbered suffix. After session lookup, the handler requires the former for a recipient-originated opening and the latter for an initiator-originated opening.
 
 ## Encoding and Decoding
 
@@ -284,7 +289,7 @@ let frame =
     decodeFrame(data)
   except SerializationError as exc:
     return err("could not decode transport frame: " & exc.msg)
-frame.validate().isOkOr:
+frame.validateFrame(requireValidSurbEncoding = false).isOkOr:
   return err(error)
 ok(frame)
 ```
@@ -298,18 +303,3 @@ After `decode` returns `ok`, transport handlers may safely call required accesso
 The overhead includes the complete fixed-size SURB supply snapshot because recipient-originated Data carries that snapshot. Initiator-originated Data does not need the snapshot, but using the same `MaxDataPayloadBytes` in both directions keeps chunking independent of the sender's session role.
 
 `MaxDataPayloadBytes` subtracts this named overhead from `MaxTransportFrameBytes`. The final encoder still checks the complete serialized length, so the calculated bound and the actual Sphinx capacity are enforced independently. See [[Mix Transport Implementation Walk Through - Bounded Data Flow]] for the complete write path.
-
-## Tests
-
-`tests/test_wire.nim` verifies:
-
-- Data preserves session, stream, sequence and payload across a Protobuf round trip.
-- ACK preserves `receiveBase` and the fixed bitmap, while a 31-byte bitmap is rejected when 32 bytes are required.
-- Numbered supply preserves its first sequence and individual public SURBs.
-- A supply snapshot preserves its fixed receive base, 32-byte bitmap and absolute limit, while an incomplete or incorrectly sized snapshot is rejected.
-- Individual SURBs agree with Mix's canonical `serializeSurb` and `deserializeSurb` boundary.
-- Fields that contradict `kind` are rejected.
-- Stream rejection preserves its diagnostic reason and also permits the defined no-reason fallback case.
-- Unsupported versions, oversized frames, malformed Protobuf and incomplete Protobuf are rejected.
-
-The live component test creates cryptographically valid SURBs and exercises initiator-driven supply, Data and ACK through a real five-node Mix path. The wire unit tests stay focused on the serialization and validation boundary.

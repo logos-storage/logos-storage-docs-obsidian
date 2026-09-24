@@ -6,7 +6,7 @@ related:
   - "[[Mix Transport Implementation Walk Through - Stream Establishment Round Trip]]"
 ---
 
-This phase separates two concerns that had previously been implemented through generic procedures and inheritance inside `transport.nim`. Concurrent calls to `MixTransport.connect` are now coordinated by a transport-owned `ConnectAttemptCoordinator`, while the delayed-acknowledgement test modifies one private send operation through composition. Neither mechanism changes the MixTransport wire protocol.
+Concurrent calls to `MixTransport.connect` share a transport-owned `ConnectAttemptCoordinator`. Separately, a private send callback allows a test to control one SURB submission without replacing the transport’s protocol logic. This note follows ownership, cancellation and the injection boundary; neither mechanism adds wire messages.
 
 The connection-attempt coordinator is implemented in `libp2p_mix_transport/connect_attempts.nim`. `MixTransport` integrates the coordinator in `libp2p_mix_transport/transport.nim`. The isolated coordinator tests and the real delayed-acknowledgement exchange are in `tests/test_connect.nim`.
 
@@ -201,27 +201,12 @@ await self.connectAttempts.cancelAll(
 
 `cancelAll` marks every active attempt as a shutdown cancellation, sets `retryAfterCancellation` to `false`, schedules cancellation of every worker and then waits for all workers outside the lock. Each waiting caller receives the shutdown reason as an error result. A caller that encounters one of these cancelling attempts receives the shutdown error instead of retrying that attempt.
 
-## Isolated Coordinator Tests
-
-The test-only `Synchronizer` supplies a small existing-connection table and an `AsyncEvent` that holds the operation open:
-
-```nim
-type Synchronizer = ref object
-  connectAttempts: ConnectAttemptCoordinator[string, Session]
-  sessions: Table[string, Session]
-  gate: AsyncEvent
-  operationCancelled: AsyncEvent
-```
-
-Holding the operation at `gate.wait()` allows the test to start several callers before completing the attempt. The tests verify that one caller creates one connection, an existing connection is returned without another operation, concurrent callers receive the first caller's result, cancelling one of two callers leaves the worker alive, cancelling the only caller reaches the worker, shutdown gives all callers the shutdown reason and a failed attempt does not prevent a later retry.
-
-The tests use `activeAttemptCount` to inspect only the coordinator's externally meaningful state. They do not reach into a private `ConnectAttempt` to inspect its worker future or waiter count.
 
 ## Why the Delayed-Acknowledgement Test Needs a Send Seam
 
 `ConnectAck` and `StreamAck` are each submitted through a temporary redundancy batch. The recipient awaits each single-SURB send in sequence. The first acknowledgement copy can therefore reach the initiator before the recipient has submitted the second copy.
 
-The initiator may send the next frame as soon as the first valid acknowledgement arrives. The recipient must establish and configure its session or stream before sending the first acknowledgement copy. The standalone harness exposed this ordering requirement under realistic timing, and `tests/test_connect.nim` preserves it by delaying the recipient between acknowledgement copies.
+The initiator may send the next frame as soon as the first valid acknowledgement arrives. The recipient must establish and configure its session or stream before sending the first acknowledgement copy. A delayed-acknowledgement test can exercise this ordering by holding the recipient between acknowledgement copies.
 
 The test needs control over the timing of one SURB send. The test does not need to replace redundancy selection, success aggregation or error handling.
 
@@ -296,12 +281,4 @@ sendResult
 
 Because `sendWithSurbRedundancyBatch` awaits the callback before processing the next SURB, the delay after the first copy becomes a delay before the second copy. The first copy can traverse the Mix network and trigger the initiator's next action during that interval. Non-acknowledgement frames use the original sender without an artificial delay.
 
-This composition-based seam keeps the tested production behavior intact. The test can alter timing at the external send boundary, but it cannot accidentally replace the transport's redundancy loop. `MixTransport` no longer inherits from `RootObj`, and no virtual method exists solely to support the test.
-
-## End-to-End Ordering Assertion
-
-The test named `data packets are not rejected if ACK arrives too fast` calls the normal five-node `establishSessionAndStream` helper with a two-second inter-copy delay. The helper runs real MixProtocol routing, SURB reply recovery, session establishment, stream establishment and application Data exchange.
-
-The delay gives the first `StreamAck` copy enough time to reach the initiator and lets the initiator send Data while the recipient is still inside its redundancy loop. The test succeeds only because `handleOpenStream` configures and establishes the recipient stream before calling `sendStreamResponse`. If the old ordering returns, the early Data frame reaches a pending or unconfigured stream and the exchange fails.
-
-The seam therefore preserves the failure mode discovered by the standalone harness while keeping production architecture independent from test inheritance.
+This composition-based seam keeps the tested production behavior intact. The test can alter timing at the external send boundary, but it cannot accidentally replace the transport's redundancy loop. `MixTransport` does not inherit from `RootObj`, and no virtual method exists solely to support the test.

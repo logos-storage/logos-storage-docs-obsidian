@@ -51,7 +51,7 @@ All virtual streams in the session share this queue. A reverse frame belongs to 
 
 ## 2. Handshake Frames Carry Immediate Reply Paths and Initial Supply
 
-`Connect` and `OpenStream` both need an immediate reverse response. Each frame reserves the first two SURBs for that response and uses its remaining guaranteed space for numbered session supply. `Connect` establishes the first supply entries because no session supplier can operate before the recipient acknowledges the session. Later `OpenStream` frames can extend the same supply sequence without requiring a separate forward packet.
+`Connect` and initiator-originated `OpenStream` both need an immediate reverse response. Each frame reserves the first two SURBs for that response and uses its remaining guaranteed space for numbered session supply. `Connect` establishes the first supply entries because no session supplier can operate before the recipient acknowledges the session. Later `OpenStream` frames can extend the same supply sequence without requiring a separate forward packet.
 
 The wire module records fixed capacities established from the maximum legal size of every variable-length field:
 
@@ -67,7 +67,7 @@ For both handshake frames, the first `DefaultReplySurbRedundancy` SURBs are unnu
 
 `Connect` holds five SURBs: two response paths and three numbered bootstrap entries. A dedicated `SurbSupply` frame also holds five SURBs, all of which are numbered supply. `OpenStream` includes a stream identifier and a codec, so its guaranteed capacity is four SURBs: two response paths and two numbered supply entries. The capacity assumes a codec of `MaxCodecBytes`, ensuring that a shorter codec does not change the frame layout or the amount of supply attached by `dial`.
 
-The wire tests encode frames at these declared capacities with maximum-size fields and compare the raw Protobuf length with `MaxTransportFrameBytes`. The tests also add one SURB and verify that the raw encoding exceeds the available transport payload. These checks keep the named constants tied to the actual Sphinx framing boundary.
+The frame-capacity constants include maximum-size fields. The complete encoded envelope must also fit within `MaxTransportFrameBytes`; the packet-size calculation and final encoding check are described in [[Mix Transport Implementation Walk Through - Wire Format Foundation]].
 
 ## 3. The Initiator Registers the Connect Bootstrap Supply
 
@@ -144,7 +144,7 @@ The recipient then attaches its complete supply snapshot to `ConnectAck`. With t
 
 ## 5. OpenStream Carries Response Paths and Numbered Supply
 
-After session establishment, `dial` creates an `OpenStream` frame. The first two SURBs are unnumbered response paths consumed by `StreamAck` or `StreamReject`. If the recipient has advertised at least two unfilled positions, `dial` also places two numbered supply SURBs in the remaining guaranteed frame space. When fewer positions are available, `dial` attaches only the number authorized by the latest supply snapshot.
+After session establishment, an initiator-side `dial` creates a forward `OpenStream` frame. The first two SURBs are unnumbered response paths consumed by `StreamAck` or `StreamReject`. If the recipient has advertised at least two unfilled positions, `dial` also places two numbered supply SURBs in the remaining guaranteed frame space. When fewer positions are available, `dial` attaches only the number authorized by the latest supply snapshot.
 
 ```nim
 proc dial*(
@@ -541,13 +541,3 @@ proc newMixTransport*(
 After ordinary reverse activity stops, the initiator waits `reverseActivityTimeout` before sending the first probe. Each unanswered attempt is followed by `surbStatusProbeRetryInterval`. After the final configured attempt, the initiator still waits one complete retry interval for its response.
 
 If no valid reverse snapshot arrives by the next deadline, `runSurbSupplier` removes that session from the transport registry, removes the session's reply credentials and calls `session.shutdown()`. Shutdown cancels and awaits the supplier and stream-owned tasks and wakes reverse senders that may be waiting for SURBs. Other sessions owned by the same transport remain active.
-
-## 13. What the Tests Establish
-
-`tests/test_wire.nim` verifies the physical frame capacities using raw Protobuf lengths. `Connect` fits five SURBs, a maximum-length `OpenStream` fits four, and a dedicated `SurbSupply` frame fits five; adding one SURB to any of these full frames exceeds `MaxTransportFrameBytes`. The same tests verify that the first two handshake SURBs remain the unnumbered response batch and that any suffix has numbered-supply metadata.
-
-`tests/test_sessions.nim` verifies the bounded queue and sequence rules directly. The Connect bootstrap test registers three initial sequences before credit exists, applies a snapshot with receive base three and supply limit sixteen, and verifies that the projected inventory begins at three. After allocating the remaining thirteen positions, the projection reaches sixteen. A snapshot granting two replacement positions lowers the projection to fourteen and does not cross the default watermark. A later snapshot grants five positions, lowers the projection to eleven and makes a replenishment cycle due. The status-probe test verifies that attempts advance their deadline and that valid reverse activity resets the counter.
-
-`tests/test_lifecycle.nim` verifies that the default watermark equals recipient capacity minus one full `SurbSupply` packet and that the constructor accepts an explicit watermark for deployments that tune the policy through field measurements.
-
-`tests/test_connect.nim` runs the protocol through a live five-node Mix topology. The test establishes a session and stream, waits for the initiator-driven numbered supply to fill the recipient's advertised capacity, and exchanges application data through the standard `Connection` interface.

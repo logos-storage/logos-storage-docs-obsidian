@@ -6,9 +6,9 @@ related:
   - "[[Mix Transport SURB Replenishment Strategy]]"
   - "[[Mix Transport Implementation Walk Through - SURB Replenishment]]"
 ---
-This phase adds the initiator-side state needed to receive replies through SURBs and connects the state to `MixTransport.handleRawSurbReply`. The store is used by the `Connect` handshake described in [[Mix Transport Implementation Walk Through - Connect Handshake]] and by every later SURB supplied to the session recipient.
+The initiator-side reply credential store retains the state needed to receive replies through SURBs and is used by `MixTransport.handleRawSurbReply`. The store is used by the `Connect` handshake described in [[Mix Transport Implementation Walk Through - Connect Handshake]] and by every later SURB supplied to the session recipient.
 
-The implementation is in `libp2p_mix_transport/reply_credentials.nim`, with focused tests in `tests/test_reply_credentials.nim`.
+The implementation is in `libp2p_mix_transport/reply_credentials.nim`.
 
 ## Why the Initiator Stores Credentials
 
@@ -144,21 +144,3 @@ The store keeps only a limited number of retired identifiers so that repeated-re
 When the tombstone table is full, the store compares the new identifier's expiry time with the expiry times already stored. The store retains the identifiers that remain valid for the longest time and discards the candidate whose expiry comes first. The discarded candidate may be either an existing tombstone or the new identifier. Evicting a tombstone only removes additional repeated-packet suppression; eviction does not remove a credential needed to recover an outstanding reply.
 
 `removeSession(sessionId)` uses the same retirement rule during cancellation or teardown. The procedure first purges entries that are already expired, then removes every still-active credential owned by the selected session and retires each identifier until its individual deadline. Credentials belonging to one session can have different deadlines because bootstrap, stream-opening, numbered-supply and status-probe operations create them at different times.
-
-## Tests
-
-The focused tests create real Mix `ReplyCredential` values by generating a minimal one-hop return path and calling `createSURB`. To exercise successful recovery, the helper builds a normal empty-codec Mix reply, pads it to the fixed Sphinx message size with `addPadding`, sends it through the SURB with `useSURB`, processes the return hop and passes the resulting `RawSurbReply` to the store. This path avoids constructing opaque credentials by assigning their private cryptographic fields.
-
-The tests establish the essential behavior:
-
-- consuming one credential leaves other independently registered credentials active;
-- a full store rejects a new atomic addition while preserving active credentials;
-- retired identifiers are independently bounded, become semantically inactive at their deadline and remain stored until an explicit purge;
-- removing one session retires its active identifiers while preserving another session's credentials;
-- an expired credential is invisible before `purgeExpired` removes its table entry;
-- an unknown identifier remains available to Mix's embedded fallback path;
-- every successfully recovered redundant copy consumes only its matching credential;
-- Sphinx corruption retains the matching credential for a potentially valid later packet;
-- a cryptographically recovered but malformed Mix payload consumes only the matching credential.
-
-`MixTransport` owns one `ReplyCredentialStore`, clears the store during shutdown and uses it from the registered raw-reply callback. Recovered bytes are decoded as a `MixTransportFrame`, and the frame's `sessionId` must match `StoredReplyCredential.sessionId` before the frame is dispatched to the live session.

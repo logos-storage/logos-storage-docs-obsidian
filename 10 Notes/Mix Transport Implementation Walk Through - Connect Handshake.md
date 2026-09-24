@@ -9,9 +9,9 @@ related:
   - "[[Mix Transport SURB Replenishment Strategy]]"
   - "[[Mix Transport Implementation Walk Through - SURB Replenishment]]"
 ---
-This phase implements the first complete exchange between two MixTransport endpoints. The initiator sends `Connect` anonymously through the Mix network, the recipient replies through a SURB supplied in that frame, and the initiator establishes the session only after recovering a valid `ConnectAck`.
+The Connect handshake establishes a session between two MixTransport endpoints. The initiator sends `Connect` anonymously through the Mix network, the recipient replies through a SURB supplied in that frame, and the initiator establishes the session only after recovering a valid `ConnectAck`.
 
-The transport implementation is in `libp2p_mix_transport/transport.nim`. Session-owned received SURBs are stored by `libp2p_mix_transport/sessions.nim`, and session-specific credential cleanup is implemented in `libp2p_mix_transport/reply_credentials.nim`. The end-to-end exchange is exercised by `tests/test_connect.nim`.
+The transport implementation is in `libp2p_mix_transport/transport.nim`. Session-owned received SURBs are stored by `libp2p_mix_transport/sessions.nim`, and session-specific credential cleanup is implemented in `libp2p_mix_transport/reply_credentials.nim`.
 
 ## Why Connect Requires a Round Trip
 
@@ -90,7 +90,7 @@ Each call to `MixProtocol.sendWithSurb` consumes the supplied SURB, even if that
 
 The recipient marks its local session established before submitting the first redundant acknowledgement. This ordering is required because the first copy can reach the initiator while the recipient is still awaiting later sends. Once the initiator observes `ConnectAck`, it may immediately send `OpenStream` or Data; the recipient must already accept that session traffic. Complete acknowledgement failure removes the session. Cancellation also removes it because cancellation explicitly terminates the local handshake, regardless of whether an earlier copy escaped.
 
-The three numbered bootstrap SURBs remain in the recipient's session queue. After the initiator recovers `ConnectAck`, its supplier removes the acknowledged bootstrap entries from `pendingSurbSupply` and sends thirteen additional numbered SURBs to fill the advertised capacity. `OpenStream` always supplies two dedicated response paths and uses any remaining frame space for further numbered session supply when the current credit permits it.
+The three numbered bootstrap SURBs remain in the recipient's session queue. After the initiator recovers `ConnectAck`, its supplier removes the acknowledged bootstrap entries from `pendingSurbSupply` and sends thirteen additional numbered SURBs to fill the advertised capacity. An initiator-originated `OpenStream` supplies two dedicated response paths and uses any remaining frame space for further numbered session supply when the current credit permits it.
 
 ## Recovering ConnectAck on the Initiator
 
@@ -114,7 +114,7 @@ The implemented stream and supply frames follow the same directional rule. Forwa
 
 ## Timeout, Cancellation, and Cleanup
 
-The initiator currently waits up to thirty seconds for its session's establishment event. Tests can supply a shorter timeout through `newMixTransport`.
+The initiator waits up to thirty seconds by default for its session’s establishment event. Callers can configure this timeout through `newMixTransport`.
 
 If SURB creation, credential registration, frame encoding, Mix submission, or the acknowledgement wait fails, `connect` removes the pending session and removes every reply credential registered under its `sessionId`. Cancellation propagates as `CancelledError`, but the same deferred cleanup runs before it leaves the operation. This prevents a failed handshake from occupying the destination lookup or leaving credentials that no live session can consume.
 
@@ -122,31 +122,8 @@ If SURB creation, credential registration, frame encoding, Mix submission, or th
 
 The recipient similarly removes its new session if it receives too few valid SURBs, cannot store them, cannot encode `ConnectAck` or cannot submit the acknowledgement through at least one selected SURB. The recipient establishes the local state before publication, but complete acknowledgement failure is still a definite rollback condition because no initiator could have acted on the acknowledgement.
 
-## Current Behavior When Packets Are Lost
+## Packet Loss
 
-The acknowledgement has two redundant delivery attempts because the recipient forms a temporary batch containing two SURBs. The `Connect` frame itself is currently submitted once. If the forward packet is lost, or if both redundant acknowledgements are lost, the initiator reaches its connect timeout and removes the pending session and its credentials.
+The acknowledgement has two redundant delivery attempts because the recipient forms a temporary batch containing two SURBs. The `Connect` frame itself is submitted once. If the forward packet is lost, or if both redundant acknowledgements are lost, the initiator reaches its connect timeout and removes the pending session and its credentials.
 
-This phase does not retransmit `Connect`. Adding retransmission requires duplicate `Connect` handling on the recipient: a repeated frame for the same pending or established `sessionId` must cause another acknowledgement without creating another session. That behavior should be implemented together so retransmission cannot create duplicate recipient state.
-
-## End-to-End Test
-
-`tests/test_connect.nim` creates five real MixProtocol nodes. Five nodes provide enough candidates for the three-node forward path while excluding the selected destination where required, and enough candidates for the return paths encoded in the SURBs.
-
-Every node mounts MixProtocol on a TCP libp2p switch and knows the other nodes' `MixPubInfo`. The test starts MixTransport on the first and last nodes, then calls `connect` from the first transport using the last node's real `PeerId`.
-
-Success exercises the complete path:
-
-```text
-initiator MixTransport
-  -> Connect encoded as Protobuf
-  -> MixProtocol.send
-  -> three-hop forward Sphinx path
-  -> recipient MixTransport delivery handler
-  -> ConnectAck through two public SURBs
-  -> return Sphinx paths
-  -> initiator raw reply handler
-  -> credential recovery
-  -> pending session becomes established
-```
-
-The test verifies that the returned session has the initiator role, is established and exposes the real destination as its consumer-facing `peerId`. It then calls `connect` again with the same destination and verifies that MixTransport returns the identical `TransportSession` rather than generating a new pseudonym or sending another handshake. Before opening a stream, the test waits until initiator-driven numbered supply fills the recipient's advertised capacity. The test also observes redundant raw replies and verifies that each independent credential recovers its copy while only the first copy of a logical acknowledgement changes session or stream state.
+Connect is not retransmitted. The recipient ignores a Connect whose session ID is already registered rather than sending another acknowledgement. Data and supply retransmission are separate mechanisms and do not repair a lost establishment exchange.

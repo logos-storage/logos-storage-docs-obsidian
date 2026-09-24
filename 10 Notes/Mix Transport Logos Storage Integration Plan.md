@@ -9,6 +9,9 @@ related:
 
 # Mix Transport Logos Storage Integration Plan
 
+
+> Historical implementation plan. The dated milestones and proposed steps below record the integration process, not the current work queue. The release-candidate baseline and unresolved review items are tracked in [[Mix Transport Documentation Maintenance]] and [[Mix Transport Logos Storage Integration - Validation and Open Questions]]. Read [[Mix Transport Logos Storage Integration - Download Transport Selection]] for current behavior.
+
 ## Direct compatibility review — 16 September 2026
 
 Direct-only downloads must preserve master's original behavior and benchmark performance. Keep the current protocol connection handling and mounted `dispatchProtocol`; isolate behavioral variation through small injected policies rather than duplicating protocol or engine types. The first increment restores master's presence-peer selection for both transports by default, while retaining provider prioritization and provider-only eligibility as explicit experiments. The second increment restores querying after failed swarm admission by default and retains admission-only querying as an independent opt-in. The third increment removes explicit Direct registration after connecting and restores Switch-event ownership of registration. No alternate lifecycle policy is retained. The fourth increment restores passing complete provider address lists to libp2p in both Direct protocols, without a filtering policy. Download-ID-bound streaming readers are retained as an explicitly accepted shared correctness correction, including for two Direct downloads of the same tree. Next: review discovery/background reuse isolation and remaining bookkeeping overhead. Advertisement preservation through later mappers and the announced-address bypass is a separate follow-up recorded in the behavioral-changes note. Decisions and rationale are recorded in [[BlockExchange Mix Integration - Behavioral Changes and Experiments]].

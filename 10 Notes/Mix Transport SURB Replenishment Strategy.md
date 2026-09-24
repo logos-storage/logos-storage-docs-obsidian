@@ -29,7 +29,7 @@ One session-wide queue prevents SURBs from becoming stranded in an idle stream w
 
 When the recipient sends one reverse frame, it removes several individual SURBs from the queue and sends the same encoded frame through each selected SURB. This temporary collection is a redundancy batch. The current policy selects two SURBs, giving the logical frame two independent opportunities to reach the initiator.
 
-The redundancy batch exists only for the duration of that send operation. Neither the queue nor the wire format stores persistent SURB groups. A later policy can therefore choose a different redundancy count for a particular session, stream or frame kind without changing how individual SURBs are supplied and acknowledged.
+The redundancy batch exists only for the duration of that send operation. Neither the queue nor the wire format stores persistent SURB groups. Individual supply and receipt tracking are independent of the send-time batch. The reference implementation nevertheless uses a fixed redundancy of two; dynamic redundancy is not a supported configuration.
 
 ## Establishing Supply During Handshakes
 
@@ -41,9 +41,11 @@ With the current Sphinx and MixTransport encoding, a `Connect` frame can carry f
 
 `ConnectAck` reports that the first three numbered SURBs arrived and advertises the recipient's absolute supply limit. For a capacity of sixteen, the snapshot contains a supply receive base of three and a supply limit of sixteen. The initiator can then send sequences three through fifteen to fill the remaining thirteen queue positions.
 
-An `OpenStream` frame also uses all of its guaranteed SURB capacity. The first two SURBs are unnumbered and dedicated to `StreamAck` or `StreamReject`. Any remaining positions carry numbered supply for the session-wide queue. Because `OpenStream` must be sent regardless, attaching these additional SURBs uses space in an existing Sphinx packet and can avoid a later standalone `SurbSupply` packet.
+An initiator-originated `OpenStream` uses its guaranteed SURB capacity subject to available numbered credit. The first two SURBs are unnumbered and dedicated to `StreamAck` or `StreamReject`. Any remaining positions carry numbered supply for the session-wide queue. Because `OpenStream` must be sent regardless, attaching these additional SURBs uses space in an existing Sphinx packet and can avoid a later standalone `SurbSupply` packet.
 
 The guaranteed `OpenStream` capacity is calculated for the maximum permitted codec length rather than the codec supplied by one particular call. Consequently, every valid codec gives `OpenStream` the same SURB layout. The current maximum-length frame holds four SURBs: two response paths and two numbered supply entries.
+
+A recipient-originated OpenStream instead consumes the existing session queue and carries its supply snapshot, with no public SURBs attached. The accepting initiator replies through the forward path. This preserves the session roles even though either endpoint can open a stream.
 
 ## Bounding Supply with Absolute Credit
 
@@ -75,7 +77,7 @@ The initiator needs to know which numbered SURBs arrived and how many new SURBs 
 - the fixed acknowledgement bitmap;
 - the absolute supply limit.
 
-`ConnectAck` carries the initial snapshot. Later reverse Data, ACK, `StreamAck`, `StreamReject` and `SurbStatus` frames carry the recipient's latest snapshot. All three values travel together so the initiator applies receipt information and the corresponding capacity information as one state update.
+`ConnectAck` carries the initial snapshot. Later reverse Data, ACK, OpenStream, stream responses, teardown and `SurbStatus` frames carry the recipient's latest snapshot. All three values travel together so the initiator applies receipt information and the corresponding capacity information as one state update.
 
 When a snapshot acknowledges a numbered SURB, the initiator removes that SURB's public serialization from retransmission state. The initiator retains the corresponding private reply credential because the recipient may still hold and later use the public SURB.
 

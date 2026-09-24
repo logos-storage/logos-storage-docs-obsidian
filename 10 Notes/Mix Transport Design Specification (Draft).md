@@ -1,0 +1,267 @@
+---
+related:
+  - "[[Libp2p Connection Lifecycle in Logos Storage]]"
+  - "[[Sphinx SURBs implementation in the libp2p MIX protocol]]"
+  - "[[New Logos Storage Discovery]]"
+  - "[[Mix Transport - Pluggable Integration Model]]"
+  - "[[Mix Transport Implementation Walk Through]]"
+  - "[[Mix Transport SURB Replenishment Strategy]]"
+  - "[[Mix Transport Implementation Walk Through - Session Lifecycle Events]]"
+  - "[[Mix Transport Block Exchange Integration - Session Events]]"
+  - "[[Mix Transport Logos Storage Integration Example]]"
+---
+## Purpose
+
+Storage-specific integration progress is maintained in [[Mix Transport Logos Storage Integration Plan]]. The working per-download implementation is described in [[Mix Transport Logos Storage Integration - Download Transport Selection]]: each download selects Direct or Mix, with separate peer connection state and no direct fallback for a Mix request. The generic transport described here does not itself decide which providers belong to a Storage download's swarm.
+
+`MixTransport` provides long-lived, multiplexed libp2p-style connections over the anonymous Mix packet service. Application protocols continue to work with normal `Connection` operations and mounted `LPProtocol` handlers, while the transport owns the session pseudonym, stream multiplexing, chunking, ordering, acknowledgements, return-path SURBs, backpressure and reliability policy.
+
+The generic implementation lives in the `libp2p-mix-transport` repository. Logos Storage is its first consumer, but block exchange, DHT proxy behavior and Storage-specific peer management do not belong in the transport package.
+
+The transport uses exit-equals-destination routing. The final Mix node is the application destination and dispatches the opaque service payload directly to the registered MixTransport handler. The final architecture does not require an exit proxy to dial a separate destination or interpret an application-specific read instruction.
+
+## Layering and Ownership
+
+`MixProtocol` owns the cryptographic packet service:
+
+- construction and processing of Sphinx packets;
+- anonymous routing through the selected hops;
+- replay-tag checking at Mix packet level;
+- creation and one-time use of public SURBs;
+- recovery of a raw SURB reply when given its private `ReplyCredential`;
+- dispatch of an opaque final-hop payload by service codec;
+- offering an opaque raw SURB reply to the registered plug-in before the embedded legacy reply path.
+
+`MixTransport` owns the connection protocol built from that service:
+
+- long-lived pseudonymous sessions;
+- virtual stream identifiers and stream lifecycle;
+- the application-facing `Connection` objects;
+- Data chunking, sequencing and ordered reconstruction;
+- receive windows, acknowledgements and sender backpressure;
+- private reply credentials at the original sender;
+- the public received-SURB queue at the recipient;
+- temporary send-time redundancy batches, push-based SURB replenishment and return-send serialization;
+- retransmission, timeouts, close and resource limits.
+
+Mix remains usable without MixTransport. Another upper layer may use the stateless Mix service and SURB primitives to implement a different protocol. The embedded Mix connection behavior can coexist as a fallback while the plug-in architecture is introduced.
+
+## Session Identity
+
+The initiator calls `connect(destination)` with the real `PeerId` of the destination Mix node. For a new relationship it generates a random, valid `PeerId` value as `sessionId` and sends it in `Connect`.
+
+The two endpoints intentionally expose different peer identifiers to their applications:
+
+```text
+initiator-side Connection.peerId = real destination PeerId
+recipient-side Connection.peerId = anonymous sessionId
+```
+
+The recipient never learns the initiator's authenticated libp2p identity from this transport. Its `sessionId` is a local pseudonymous peer key used to associate streams and application state belonging to the same anonymous session. It is not inserted into the ordinary libp2p peer store and is not used with `Switch.connect` or `Switch.dial`.
+
+`connect(destination)` reuses an established session for that destination. Concurrent calls made while the first handshake is pending share one transport-owned connection attempt and receive the same session when it succeeds. Cancelling one caller does not cancel the shared attempt while another caller remains; transport shutdown cancels every outstanding attempt. The session pseudonym remains stable while the consumer considers that peer connected. Opening or closing an individual stream does not create a new peer identity. Removing the complete session and later connecting again creates a new pseudonym, which the recipient observes as a new peer.
+
+## Session Establishment
+
+The initiator does not consider a session established merely because `MixProtocol.send` accepted `Connect`. It waits for a matching `ConnectAck` recovered through one of the supplied SURBs:
+
+```text
+initiator                                      recipient
+
+create pending session S
+create public SURBs and private credentials
+        |
+        | Connect(S, public SURBs)
+        v
+                                      create pending recipient session S
+                                      store public SURBs
+                                      form a redundancy batch for ConnectAck
+                                      establish recipient session
+        ^
+        | ConnectAck(S) through SURBs
+        |
+recover with session-owned credential
+establish initiator session S
+```
+
+The private credentials remain at the initiator. The recipient receives only public SURBs. Successful recovery consumes the credential identified by that reply and records its identifier as retired. A redundant copy travelling through another SURB is recovered with its own credential, after which the idempotent `ConnectAck` transition observes that the session is already established and has no second effect.
+
+## Virtual Streams and Protocol Dispatch
+
+Either endpoint may open a stream within an established session. The recipient calls `connect` or `dial` with the anonymous peer ID to reuse that session; the recipient cannot create a new session back to an otherwise unknown initiator. A recipient-originated `OpenStream` uses existing session SURBs and carries a supply snapshot but no attached SURBs. Its `StreamAck` or `StreamReject` uses the forward path. See [[Mix Transport Implementation Walk Through - Recipient-Originated Streams]] for the role-aware lookup, dispatch, duplicate handling, and cleanup. The initiator-originated exchange described below remains unchanged.
+
+One session carries multiple virtual application streams. A stream is identified by `(sessionId, streamId)`. The endpoint that opens a stream chooses its ID, and the other endpoint uses the same ID.
+
+To avoid simultaneous allocation collisions without another coordination exchange:
+
+- the session initiator allocates odd stream IDs;
+- the session recipient allocates even stream IDs.
+
+The wire protocol represents a stream identifier with the `StreamId` alias, currently a 32-bit unsigned integer encoded as Protobuf `fixed32`. The session allocator owns the odd or even progression and records exhaustion explicitly instead of allowing the value to wrap. Keeping the primitive width behind `StreamId` confines a future width change to the transport's identifier domain, although such a wire-format change still requires a new protocol version.
+
+`dial(destination, codec)` reuses or establishes the session, registers a pending outbound stream and sends `OpenStream`. The recipient resolves `codec` through the Switch multistream registry, applies `LPProtocol.reserveIncoming(session.peerId)`, and either sends `StreamReject` with a bounded diagnostic reason or registers the matching inbound stream, prepares its bounded receive path and sends `StreamAck`.
+
+The initiator returns the stream only after recovering `StreamAck`. Before publishing that acknowledgement, the recipient configures and establishes its stream so Data sent immediately after the first redundant ACK copy is accepted. After at least one copy succeeds, the recipient starts the mounted protocol handler as a separate task so a long-running application read loop does not block later Mix deliveries. The same publication rule applies to `ConnectAck`: recipient session state becomes operational before the first positive acknowledgement copy can reach the initiator. Complete failure of every redundant copy permits rollback because no positive acknowledgement was published.
+
+`TransportStream` inherits from libp2p's `BufferStream`. The stream stored in the session table, passed to the protocol handler and used for application reads and writes is one object rather than a wrapper around separate transport state.
+
+## Wire Protocol
+
+Transport frames are Protobuf messages carried as opaque payloads under `/libp2p/mix-transport/1.0.0`. Every frame contains a version, session pseudonym and kind. Optional fields are validated against that kind before any handler accesses them.
+
+`StreamId` and `SequenceNumber` are transport-specific aliases for `uint32`. Stream identifiers, Data sequence numbers and ACK receive bases use fixed-width Protobuf encoding. The fixed representation gives every Data frame the same numeric-field overhead and keeps the payload bound independent of the current stream ID or sequence number. A future change to either alias remains localized in the implementation, but changing the encoded width is intentionally treated as a wire-protocol version change.
+
+The binary session pseudonym is limited to 39 bytes, the representation produced by the current `PeerId.random` generator used by `connect`. Bounding the remaining variable-size Data identifier allows the complete maximum Data-frame overhead to be known before chunking.
+
+The currently active frames are:
+
+| Frame | Direction and purpose |
+| --- | --- |
+| `Connect` | Initiator to recipient; creates the session and supplies initial public SURBs |
+| `ConnectAck` | Recipient to initiator through SURBs; confirms the session round trip |
+| `OpenStream` | Stream opener to remote endpoint; selects stream ID and application codec, supplies two dedicated SURBs for `StreamAck` or `StreamReject`, and uses remaining guaranteed capacity for numbered session supply |
+| `StreamAck` | Remote endpoint to opener; confirms registration and protocol admission |
+| `StreamReject` | Remote endpoint to opener; rejects the stream with an optional bounded reason |
+| `Data` | Either logical direction; carries one sequenced chunk |
+| `Ack` | Either logical direction; reports an absolute receive-base and bitmap snapshot |
+| `SurbSupply` | Initiator to recipient through the forward path; carries consecutively numbered individual public SURBs |
+| `SurbStatusProbe` | Initiator to recipient through the forward path; carries dedicated SURBs for a status response |
+| `SurbStatus` | Recipient to initiator through the probe SURBs; reports absolute supply state when the ordinary queue can be empty |
+| `CloseStream` | Either logical direction; declares the sender's final Data sequence and closes the stream after all preceding Data has entered the remote ordered buffer |
+| `ResetStream` | Either logical direction; aborts one stream immediately |
+| `Disconnect` | Either logical direction; gracefully removes an idle session after its streams have closed |
+| `ResetSession` | Either logical direction; aborts the complete session and all remaining streams |
+
+Data frames never carry SURBs. `Connect` and `OpenStream` reserve their first two SURBs for the direct handshake response and use the remaining guaranteed frame capacity for numbered supply to the recipient's bounded session queue. `Connect` currently holds five SURBs in total, while an `OpenStream` with the maximum legal codec length holds four. A dedicated `SurbSupply` frame continues the same numbered sequence and holds five SURBs. `SurbStatusProbe` carries two unnumbered SURBs that are used immediately for `SurbStatus` and never enter the session queue.
+
+## Data Chunking and Outbound Bounds
+
+Application writes may exceed one Sphinx payload. MixTransport divides each write into consecutive `Data` frames using `MaxDataPayloadBytes`. The bound subtracts the complete maximum Data-frame overhead, including the recipient's fixed-size SURB supply snapshot, from the Sphinx payload space left after Mix service framing. Because the session identifier is bounded and the stream ID, Data sequence, supply receive base and supply limit are fixed-width fields, the transport uses one payload limit in both directions instead of repeatedly encoding candidate frames to determine the capacity of each chunk. Frame validation enforces the payload limit, and final encoding independently enforces the complete Mix frame limit.
+
+Application write boundaries are not visible at the read side. Concurrent writes to one stream are serialized, and the remote endpoint reconstructs one ordered byte stream.
+
+Every submitted chunk remains in the sender's `pendingOutbound` table until acknowledged. The current `MaxInflightChunks` is 64. When Data retransmission is enabled, each retained chunk receives a fixed retransmission deadline after its initial submission and after each retry. The default timeout is 30 seconds. Retries continue until an ACK removes the chunk or the stream closes; a future RTT-based policy may replace the fixed timeout.
+
+Data retransmission is enabled by default. `newMixTransport` accepts `enableDataRetransmissions = false` for deployments that prefer delivery attempts without automatic Data retries. Disabling retransmission does not remove `pendingOutbound`: the retained chunks are still required for ACK processing, the in-flight bound and remote receive-window enforcement.
+
+The sender also respects the remote receive limit derived from the latest acknowledged receive base. It cannot introduce a sequence outside the 256-position window advertised by the remote endpoint.
+
+Data sequences use values from `1` through `MaxDataSequenceNumber`, where `MaxDataSequenceNumber` is `SequenceNumber.high - 1`. `SequenceNumber.high` is reserved for the terminal receive base. After the receiver delivers the final valid Data sequence, it advances `receiveBase` to that terminal value and can acknowledge complete delivery without integer wraparound. Reaching the limit exhausts the stream's sequence space; the transport does not reuse sequence numbers within that stream.
+
+## Receive Window and ACK Semantics
+
+Each stream has a 256-position receive window represented by:
+
+```text
+receiveBase + fixed 32-byte acknowledgement bitmap
+```
+
+Every sequence below `receiveBase` has entered the receiver's ordered `BufferStream`. Bitmap bit `i` states whether sequence `receiveBase + i` is currently retained. The receiver stores out-of-order payloads only inside this window, suppresses duplicates, and never delivers a later chunk across a missing earlier sequence.
+
+An ACK is an absolute snapshot, not a delta. The sender removes every retained chunk below the reported base and every retained chunk selected by a set bitmap bit. An older base is ignored. Duplicate Data causes the receiver to send another snapshot because the sender may have retransmitted after losing an earlier ACK. Data above the receive window is invalid under the sender's flow-control rules, so the receiver discards such Data without sending an ACK. This prevents invalid frames from causing unnecessary Mix traffic: an ACK sent by the session recipient would consume a temporary SURB redundancy batch, while an ACK sent by the session initiator would consume a forward Mix delivery.
+
+ACK generation is currently immediate. Delayed ACK policy may later reduce packet and SURB consumption without changing the wire representation.
+
+## Application Backpressure
+
+Ordered receive delivery awaits `BufferStream.pushData`, whose asynchronous queue has capacity one. If the application stops reading, that push blocks and `receiveBase` stops advancing. The sender eventually reaches the unchanged remote receive limit and cannot reserve more sequences.
+
+This design bounds transport memory without modifying libp2p's read implementation. It grants credit when a chunk enters the bounded application-facing buffer, not when the application has consumed its final byte. More exact byte-level credit can be added only if measurements show that the existing fixed staging is insufficient.
+
+## Return Delivery and SURB Supply
+
+Forward frames from the session initiator use `MixProtocol.send` with the real destination. The session recipient cannot address the anonymous initiator through the forward Mix path. Every Data, ACK or control frame sent by the recipient therefore uses a temporary redundancy batch formed by removing `N` individual SURBs from the session queue. The recipient submits the same encoded frame through every selected SURB, and the copies reach the initiator through raw reply recovery.
+
+Individual SURBs are shared by all streams in a session. A per-session send lock ensures that concurrent reverse Data, ACK and control operations cannot remove the same SURB. The recipient keeps the queue within a configured capacity, while the initiator keeps each corresponding private reply credential until that SURB is used, expires or the session closes. The redundancy batch has no wire representation and does not persist after its reverse frame has been submitted.
+
+The initiator is solely responsible for replenishment. The recipient advertises an absolute `surbSupplyLimit`, which authorizes the initiator to introduce only a bounded number of uniquely numbered SURBs. The initiator uses the reported capacity and its allocated sequence state to estimate how many SURBs the recipient has or will have after in-flight supply arrives. A reverse frame that frees only one redundancy batch updates this estimate without causing an immediate replacement packet. When the projected inventory reaches the configurable low watermark, the initiator starts a replenishment cycle and allocates supply until the projection returns to capacity. The recipient does not send a separate refill request. The initiator retains each serialized public SURB until the recipient acknowledges it and retransmits that same numbered SURB after loss. Retransmission never creates another credential for an existing supply sequence. Before retransmission, the initiator purges expired credential-store entries, verifies that the original private credential remains active and discards the public serialization when that credential is absent. The recipient uses a receive base and fixed bitmap to accept out-of-order supply, suppress duplicates and report which public serializations the initiator may stop retaining.
+
+Every ordinary reverse transport frame carries the recipient's complete supply acknowledgement and credit snapshot. Removing SURBs for that reverse frame increases the advertised limit, so the same frame tells the initiator how many replacements it may send. If fewer than two SURBs are available, the reverse send waits for numbered supply rather than consuming a protected control reserve.
+
+Ordinary reverse activity can be lost together with the latest supply snapshot. The initiator therefore maintains a reverse-activity deadline for each established session. When the deadline expires, the initiator sends a forward `SurbStatusProbe` containing two fresh, dedicated response SURBs. The recipient uses those SURBs immediately to return its current absolute state, even when its session queue is empty. The initiator retries the probe after a configurable interval. If the configured number of attempts produces no valid reverse response, the initiator closes only that session and releases its credentials and streams. [[Mix Transport SURB Replenishment Strategy]] defines the mechanism and its safety bounds, while [[Mix Transport Implementation Walk Through - SURB Replenishment]] maps the design to the implementation.
+
+## Task and Resource Lifetime
+
+Task ownership follows the transport hierarchy. `MixTransport` owns its sessions. Each `TransportSession` owns its SURB supplier task and registered streams. Each `TransportStream` owns its ordered-delivery, ACK and Data-retransmission tasks and, for an accepted inbound application stream, the protocol-handler invocation and incoming protocol reservation.
+
+Closing a `TransportStream` wakes Data, ACK, capacity and stream-opening waiters and explicitly requests cancellation of its handler and internal tasks. The explicit cancellation also reaches a task that is no longer waiting on a stream event because it is suspended inside Mix delivery or SURB replenishment. A locally initiated close invokes a transport callback after closing the local `BufferStream`; the callback attempts the remote notification, waits for the internal stream tasks and removes the stream from its session. Natural protocol-handler completion clears its handler-task reference before closing, so the handler never waits for its own future. External session shutdown detaches the streams and waits for complete stream shutdown. Closing a session also wakes a pending `connect`; the caller then observes the closed session instead of waiting until the connection timeout.
+
+Complete shutdown proceeds through the same hierarchy. The transport synchronously detaches all sessions through `takeSessions` and makes one best-effort `ResetSession` submission for each detached session while the Mix handlers remain registered. It then unregisters the handlers. Each session synchronously detaches its streams through `takeStreams`, starts their shutdown operations and waits for them. Session shutdown suppresses redundant per-stream notifications because `ResetSession` already describes the complete subtree. The transport clears reply credentials only after all detached sessions and streams have completed local teardown.
+
+Reply credential capacity rejects new credentials rather than evicting unrelated in-flight credentials. Successful recovery consumes only the credential selected by the reply's SURB identifier. Cryptographic recovery failure preserves that credential for another packet carrying the same identifier, while successful cryptographic recovery followed by invalid transport decoding consumes the matching credential because the recovered reply cannot enter the transport state machine. Other credentials remain independent, including credentials for redundant copies of the same logical frame.
+
+Normal stream closure sends `CloseStream` with the sender's final Data sequence. Because Mix can reorder packets, the receiver records that boundary and closes only after its ordered receive path has advanced beyond it. `ResetStream` aborts immediately. A remote reset is recorded before closing `BufferStream`, and the `TransportStream.readOnce` override converts the resulting wake-up into `LPStreamResetError`. The higher-level libp2p operations `readExactly`, `readLine` and `readLp` all build on `readOnce`, so they preserve the same distinction between reset and graceful EOF.
+
+The public `disconnect(session)` operation requires the session to have no active streams. A received `Disconnect` is retained when stream-close notifications are still in flight and completes after the final stream has gone. `resetSession` and transport shutdown use `ResetSession` to abort all remaining stream state. Notifications remain best effort and local teardown continues if no delivery path is available. [[Mix Transport Implementation Walk Through - Remote Teardown]] maps these rules to the implementation and tests.
+
+## Logos Storage Integration
+
+Logos Storage selects Direct or Mix for each download. BlockExchange uses independent `BlockExcNetwork` instances held in a shared `BlockExcNetworks` object: Direct is always present, while the Mix instance is created during Mix-enabled startup with its MixTransport service already supplied. Discovery and the engine select the instance matching the download; absence of Mix never selects Direct as a fallback.
+
+Storage mounts one BlockExchange codec entry point. Its handler dispatches ordinary connections to the Direct instance and `TransportStream` connections to the Mix instance, retaining a shared incoming-stream quota. Each instance owns separate peers, sending connections, and engine callbacks. Mix peer establishment and stream dialing use MixTransport, including recipient-side dialing within an existing anonymous session. See [[Mix Transport Logos Storage Integration - Download Transport Selection]] for construction, dispatch, and lifecycle code.
+
+The recipient-side block-exchange handler receives a normal `Connection` whose `peerId` is the session pseudonym. Transport session events, rather than raw Switch JOINED events from relay connections, must determine which anonymous application peers enter or leave the block-exchange peer set. A physical relay may also be a Storage node, but its direct Mix-overlay connection is not evidence that it opened an anonymous block-exchange session.
+
+MixTransport publishes `Established` and `Closed` once for each successfully established session. On the initiator, the event peer ID is the real destination; on the recipient, the event peer ID is the anonymous session pseudonym. Closing an individual virtual stream does not publish a session event. [[Mix Transport Implementation Walk Through - Session Lifecycle Events]] defines the event contract, and [[Mix Transport Block Exchange Integration - Session Events]] describes how BlockExchange should replace raw Switch peer membership while preserving its existing joined and departed handlers.
+
+The existing exploratory `storage/mix/` code can inform initialization and dependency injection, but the generic package interface is the source of truth. Storage integration may replace that exploratory code where it does not match this design.
+
+## Current Implementation Status
+
+Implemented and covered by focused or live tests:
+
+- Mix plug-in registration with embedded fallback when the plug-in does not handle a reply;
+- stateless public SURB creation, SURB send, raw reply and recovery primitives in Mix;
+- individual reply credential registration, capacity, expiry and repeated-reply suppression;
+- session creation, pseudonymous identity and destination-based reuse;
+- odd/even stream allocation and `OpenStream` acknowledgement or rejection;
+- mounted protocol lookup, incoming admission reservation and asynchronous handler dispatch;
+- application-facing `BufferStream` connections;
+- payload-aware chunking and bidirectional Data transfer;
+- bounded sender state, fixed receive window, ordered delivery, absolute bitmap ACKs and optional Data retransmission enabled by default;
+- application backpressure through `BufferStream`;
+- individual recipient SURB storage, waiting reverse sends and serialized redundant return sends;
+- bounded absolute supply credit, numbered individual supply, out-of-order receipt and duplicate suppression;
+- initiator-driven supply based on absolute recipient credit;
+- retained public SURB retransmission and bounded starvation recovery through status probes;
+- cancellation-safe local handler and stream-task shutdown;
+- graceful stream close, immediate stream reset, graceful idle-session disconnect and complete session reset;
+- idempotent session establishment and closure events with endpoint-appropriate peer identity;
+- a five-node live request/response and graceful teardown exchange through the standard connection API.
+
+Not yet implemented:
+
+- Data retransmission retry limits and RTT/RTO selection;
+- ACK send retry and optional delayed-ACK batching;
+- a persist probe when all receive-window updates are lost;
+- teardown-frame retransmission and acknowledgement;
+- runtime session limits;
+- authenticated Mix service discovery and destination record lifecycle;
+- Logos Storage block-exchange integration using the transport session events;
+- removal of the embedded legacy path and final cleanup of forward mode.
+
+## Migration Sequence
+
+1. Complete the generic transport reliability and lifecycle mechanisms while retaining Mix's embedded fallback.
+2. Integrate the package into Logos Storage and route block-exchange connect, dial and peer events through it.
+3. Add authenticated Mix service discovery and destination record lifecycle.
+4. Migrate remaining one-shot Mix users, including DHT proxy behavior, to exit-equals-destination service dispatch or a deliberately preserved compatibility facade.
+5. Remove forward destination mode, destination read behaviors, external exit dialing and the obsolete exit-mode compile-time path after all consumers have migrated.
+
+## Final Acceptance Criteria
+
+- Two Mix-aware nodes establish a session only after a successful anonymous `Connect`/`ConnectAck` round trip.
+- The recipient exposes only the session pseudonym as the incoming connection's peer identity.
+- Repeated `connect` calls reuse the active session and its pseudonym.
+- Multiple `dial` calls create independent streams whose incoming connections share the session identity.
+- Closing a stream does not remove or re-identify the consumer peer; dropping the complete peer session does.
+- Direct Switch connections between Mix relays do not create anonymous block-exchange peers.
+- Arbitrarily sized writes are reconstructed as one ordered byte stream despite lost, reordered and duplicated packet delivery.
+- Sender state, receive buffering, reply credentials, received SURBs and tracked tasks remain within configured bounds.
+- Slow application reads stop the sender from introducing unbounded data.
+- Lost ACKs cause duplicate Data to be acknowledged again rather than delivered twice.
+- Retrying a return frame forms a fresh redundancy batch and never reuses a sent SURB.
+- Supply retransmission and bounded status probes recover lost supply state or fail the affected session explicitly.
+- Timeouts, close, reset, cancellation and capacity failures reclaim all session-owned state on both endpoints.
+- Logos Storage block exchange reuses its normal frame reader and protocol handlers over the virtual connection.
+- The final Mix routing model uses exit equals destination and does not require application-specific read behavior in Mix core.

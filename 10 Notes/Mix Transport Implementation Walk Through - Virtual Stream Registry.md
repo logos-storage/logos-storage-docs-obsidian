@@ -5,9 +5,9 @@ related:
   - "[[Mix Transport Implementation Walk Through - Session Registry]]"
   - "[[Mix Transport Implementation Walk Through - Connect Handshake]]"
 ---
-This phase adds the state needed to represent multiple virtual application streams inside one established MixTransport session. It defines `TransportStream` in `libp2p_mix_transport/streams.nim` and makes each `TransportSession` responsible for registering and removing its streams.
+The stream registry represents multiple virtual application streams inside one established MixTransport session. It defines `TransportStream` in `libp2p_mix_transport/streams.nim` and makes each `TransportSession` responsible for registering and removing its streams.
 
-`TransportStream` now inherits from libp2p's `BufferStream`, and therefore from `Connection`. The session registry, frame router, application protocol handler and buffered read/write path all refer to the same stream object; there is no separate application wrapper.
+`TransportStream` inherits from libp2p's `BufferStream`, and therefore from `Connection`. The session registry, frame router, application protocol handler and buffered read/write path all refer to the same stream object; there is no separate application wrapper.
 
 ## Stream Identity Is Scoped by the Session
 
@@ -84,7 +84,7 @@ func isValidInboundStreamId(session: TransportSession, streamId: uint64): bool =
 
 An initiator allocates odd outbound IDs itself, so it accepts even IDs in incoming `OpenStream` frames. A recipient allocates even outbound IDs itself, so it accepts odd incoming IDs. The modulo test does not claim that every identifier with the expected parity already exists; `addInboundStream` creates the stream only after also checking the session state, codec and duplicate table entry.
 
-After validation, the session creates a pending inbound stream with the exact `streamId` supplied by the opener. The recipient's `OpenStream` handler configures and establishes the stream before submitting `StreamAck` through the temporary redundancy batch supplied directly by that `OpenStream` frame. The early state change allows the recipient to accept Data that may arrive after the initiator receives the first redundant acknowledgement but before the recipient finishes submitting the remaining acknowledgement copy. If every `StreamAck` submission fails, the handler removes and shuts down the new stream.
+After validation, the session creates a pending inbound stream with the supplied ID. The accepting endpoint configures and establishes that stream before sending StreamAck. For a forward OpenStream, the response uses its dedicated SURBs; for a reverse OpenStream, it uses the forward path. If response submission fails completely, the handler removes and shuts down the stream. Before registration, `acceptInboundStreamOpening` records the attempt in a bounded history, preventing a duplicate or late opening from recreating a removed stream. [[Mix Transport Implementation Walk Through - Recipient-Originated Streams]] explains that history and the symmetric opening paths.
 
 ```nim
 if not session.isValidInboundStreamId(streamId):
@@ -99,7 +99,7 @@ session.streams[streamId] = stream
 ok(stream)
 ```
 
-At this point the stream is registered but still `Pending`. Registration lets subsequent control code refer to the same object, while the pending state prevents application use before the remote opener has been sent an acknowledgement.
+Immediately after this registration step, before the handler configures and establishes it, the stream is still `Pending`. Registration lets subsequent control code refer to the same object, while the pending state prevents application use before the remote opener has been sent an acknowledgement.
 
 ## Direction and State
 
@@ -112,7 +112,7 @@ remote endpoint: Inbound
 
 It is independent of `SessionRole`. A session initiator can receive an inbound stream opened later by the session recipient, and a session recipient can hold an outbound stream that it opened itself.
 
-Every stream starts in `Pending`. `establish` changes the state to `Established`, while `reject` changes it to `Rejected`. Both operations fire the stream's resolution `AsyncEvent`. On the recipient, the `OpenStream` handler establishes its inbound stream after successfully submitting `StreamAck`. On the opener, the reply handler establishes the pending outbound stream after `StreamAck`, or rejects it after `StreamReject`. `dial` waits on the resolution event instead of polling and then returns either the established stream or an error.
+Every stream starts in `Pending`. `establish` changes the state to `Established`, while `reject` changes it to `Rejected`. Both operations fire the stream's resolution `AsyncEvent`. On the accepting endpoint, the `OpenStream` handler establishes its inbound stream before submitting `StreamAck`. On the opener, the reply handler establishes the pending outbound stream after `StreamAck`, or rejects it after `StreamReject`. `dial` waits on the resolution event instead of polling and then returns either the established stream or an error.
 
 ## Construction Boundary
 
@@ -122,15 +122,4 @@ Every stream starts in `Pending`. `establish` changes the state to `Established`
 
 The session owns its stream table. Removing one stream deletes only that stream's entry and leaves the established transport session registered. This preserves the session pseudonym and allows later streams to reuse the same anonymous peer relationship.
 
-Removing the complete session releases its stream table together with the other session-owned state. Local stream closure already wakes Data, ACK and send-capacity waiters, and transport shutdown cancels and waits for the tracked flow tasks. The wire-level close, reset and disconnect exchanges are still pending; those operations must coordinate remote state before normal runtime session removal is complete.
-
-## Tests
-
-`tests/test_streams.nim` verifies that:
-
-- the session initiator allocates odd IDs while the recipient allocates even IDs;
-- multiple locally opened streams receive distinct sequential identifiers;
-- an inbound stream keeps the exact identifier chosen by its remote opener;
-- an endpoint rejects inbound IDs from its own allocation space, identifier zero, and duplicate IDs;
-- streams cannot be created before their transport session is established;
-- removing a stream leaves its established session available.
+Removing the session also shuts down its streams and releases session-owned state. Stream closure wakes waiters and requests cancellation of stream-owned tasks; asynchronous shutdown awaits their completion. `CloseStream`, `ResetStream`, `Disconnect`, and `ResetSession` coordinate remote teardown on a best-effort basis, as described in [[Mix Transport Implementation Walk Through - Remote Teardown]].

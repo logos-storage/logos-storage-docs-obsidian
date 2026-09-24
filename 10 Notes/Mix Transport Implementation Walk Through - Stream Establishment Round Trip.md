@@ -8,13 +8,13 @@ related:
   - "[[Mix Transport SURB Replenishment Strategy]]"
   - "[[Mix Transport Implementation Walk Through - SURB Replenishment]]"
 ---
-This phase implements the first complete virtual-stream handshake over a live Mix network. The initiator calls `MixTransport.dial(destination, codec)`. The call returns an established `TransportStream` only after the destination has registered a matching inbound stream and returned `StreamAck` anonymously through a SURB.
+The virtual-stream handshake admits an application protocol within an established session. The initiator calls `MixTransport.dial(destination, codec)`. The call returns an established `TransportStream` only after the destination has registered a matching inbound stream and returned `StreamAck` anonymously through a SURB.
 
 The established `TransportStream` is also the libp2p `Connection` passed to the mounted application handler. After this handshake succeeds, the configured stream can transfer Data and ACK frames as described in [[Mix Transport Implementation Walk Through - Bounded Data Flow]]. This note concentrates on the control round trip that decides whether that connection may exist.
 
 ## Initiator: Preparing `OpenStream`
 
-This section describes opening from the **session initiator**. Either endpoint can now open streams: the recipient-side lookup, reverse request, and forward acknowledgement are covered in [[Mix Transport Implementation Walk Through - Recipient-Originated Streams]]. The detailed SURB preparation below applies only to initiator-originated requests.
+This section describes opening from the **session initiator**. Either endpoint can open streams: the recipient-side lookup, reverse request, and forward acknowledgement are covered in [[Mix Transport Implementation Walk Through - Recipient-Originated Streams]]. The detailed SURB preparation below applies only to initiator-originated requests.
 
 `dial` first calls `connect(destination)`. If an established session already exists for the destination, `connect` returns it without starting another session handshake. Otherwise it completes the `Connect` and `ConnectAck` exchange before stream creation continues.
 
@@ -262,11 +262,3 @@ dial returns an error; stream 3 is removed     no stream 3 was registered
 ```
 
 The initiator knows the destination's real libp2p peer ID because it selected that destination. The recipient identifies the remote transport peer only by session pseudonym `S`. Opening the stream does not alter either identity rule.
-
-## Component Test
-
-`tests/test_connect.nim` starts five real Mix nodes with deterministic zero relay delay. The first and last nodes run `MixTransport`; the three middle nodes provide the Mix paths. The test performs `Connect`, reuses the established session, and then calls `dial` for a test codec.
-
-The destination Switch mounts the test codec before `dial` is called. After the first `dial` returns, the test verifies that the initiator and recipient hold the same session ID, stream ID and codec, and that both streams are established with the expected local directions. The same test now proceeds through a request and response using the ordinary connection API.
-
-The test then calls `dial` with a codec that is not mounted at the destination. It verifies that the call returns `requested protocol is not supported`, the reason provided by the destination, and that neither endpoint retains the rejected stream. The wire test separately verifies that a rejection without a reason still encodes and decodes, allowing the receiving transport to apply its unknown-reason fallback. Finally, the component test waits for both redundant `ConnectAck` replies, both redundant `StreamAck` replies, and both redundant `StreamReject` replies. This explicit synchronization ensures that teardown begins only after every expected return packet has passed through the raw reply handler.

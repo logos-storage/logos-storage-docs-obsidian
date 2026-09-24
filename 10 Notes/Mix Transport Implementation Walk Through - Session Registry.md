@@ -8,7 +8,7 @@ related:
 ---
 This note describes the transport-owned registry used by the `Connect` handshake, virtual streams and session-level SURB supply. `SessionStore` provides both the frame-routing lookup by pseudonym and the `connect(destination)` reuse lookup by real destination.
 
-The implementation is in `libp2p_mix_transport/sessions.nim`. Its focused tests are in `tests/test_sessions.nim`.
+The implementation is in `libp2p_mix_transport/sessions.nim`.
 
 ## What a Transport Session Represents
 
@@ -16,7 +16,7 @@ A `TransportSession` represents a long-lived relationship between two MixTranspo
 
 Each session has a random `sessionId` represented as a valid libp2p `PeerId`. The initiator generates this identifier before sending `Connect`. Both endpoints then include the same `sessionId` in transport frames so that an incoming frame can be routed to the correct local session.
 
-Although `sessionId` has the `PeerId` type, it is a session pseudonym rather than the initiator's authenticated libp2p identity. The recipient learns this pseudonym through Mix, but the anonymity provided by Mix prevents it from learning which authenticated libp2p peer initiated the session.
+Although `sessionId` has the `PeerId` type, it is a session pseudonym rather than the initiator's authenticated libp2p identity. The recipient learns this pseudonym through Mix. The handshake does not disclose the initiator’s real peer identity; this is not a guarantee against information disclosed by the application or inferred from traffic.
 
 ## What Each Endpoint Knows
 
@@ -115,7 +115,7 @@ proc getByDestination*(
 
 For example, `handleReplyFrame` calls `get(frame.sessionId)` because the sender placed the pseudonym in the frame. In contrast, `connect(destination)` calls `getByDestination(destination)` because its caller knows the real node it wants to reach.
 
-Recipient sessions are not stored in `byDestination`. The recipient does not know the anonymous initiator's authenticated `PeerId`, so it has no real destination value that could serve as a key in this table. It finds a recipient session only through the `sessionId` carried by incoming frames.
+Recipient sessions are not stored in `byDestination`. The recipient does not know the anonymous initiator's authenticated `PeerId`, so it has no real destination value that could serve as a key in this table. Incoming frames find it through `sessionId`. Local `connect` and `dial` calls can also use that pseudonym to reuse the established session, as described in [[Mix Transport Implementation Walk Through - Recipient-Originated Streams]].
 
 ## Adding a Session Without Leaving Partial State
 
@@ -165,56 +165,56 @@ When it finds an initiator session, it removes the entry from `bySessionId` and 
 
 Calling `remove` again with the same `sessionId` is harmless: the first call has already removed the session, so the second call returns `none`.
 
-`MixTransport` owns one `SessionStore`. A current `TransportSession` owns its stream table, individual received SURBs, numbered supply state, supplier task, reply-capacity event and per-session reply-send lock. Per-stream Data retransmission payloads and tasks live in each `TransportStream`. During shutdown, `stop` detaches the sessions and waits for each session to cancel its supplier and shut down its streams before clearing reply credentials. Coordinated runtime session teardown is still incomplete because the disconnect and reset frames are not handled yet.
+`MixTransport` owns one `SessionStore`. A current `TransportSession` owns its stream table, individual received SURBs, numbered supply state, supplier task, reply-capacity event and per-session reply-send lock. Per-stream Data retransmission payloads and tasks live in each `TransportStream`. During shutdown, `stop` detaches the sessions and waits for each session to cancel its supplier and shut down its streams before clearing reply credentials. `Disconnect` closes an idle session, while `ResetSession` aborts its streams; [[Mix Transport Implementation Walk Through - Remote Teardown]] follows these paths.
 
-## What the Tests Demonstrate
-
-The first test creates an initiator session and verifies both views of its identity. Looking it up by `sessionId` returns the session used to route transport frames, while looking it up by the real destination returns the same object used to satisfy future `connect(destination)` calls. The test also calls `establish` and verifies the transition from `Pending` to `Established`.
-
-The second test creates a recipient session. It verifies that the destination is absent, that `peerId` exposes the session pseudonym, and that the session can be found by `sessionId` but not through the destination table.
-
-The third test first registers an initiator session. It then tries to reuse that destination with another pseudonym and to reuse that pseudonym for a recipient session. Both operations must fail, the store must still contain exactly one session, and both lookups must still return the original object. This test protects the rule that a rejected registration cannot partially modify the store or replace an established mapping.
-
-The fourth test removes an initiator session by its `sessionId`. It verifies that the session disappears from both tables and that repeating the removal returns `none` without changing any other state.
-
-The supply tests exercise state that is also owned by the session. The recipient test initializes a six-SURB capacity, accepts numbered SURBs out of order, verifies that a duplicate does not enter the queue twice and checks that consuming two SURBs advances the absolute supply limit by exactly two. The initiator test applies a snapshot, registers supply up to its credit, acknowledges a contiguous prefix and one later bitmap position, and verifies that only the missing serialization remains pending. A retransmission test schedules deadlines, takes the earliest due serialization and verifies that a later snapshot removes retained entries even when they have retry deadlines.
 
 ## How the Handshake Uses the Registry
 
-The implemented `Connect` handshake now uses these operations directly. The initiating MixTransport generates a fresh session pseudonym and calls `addInitiatorSession(destination, sessionId)` before sending `Connect`. Keeping the session in `Pending` state gives the returning `ConnectAck` handler a stable object to find through the `sessionId` carried by the acknowledgement.
+The `Connect` handshake uses these operations directly. The initiating MixTransport generates a fresh session pseudonym and calls `addInitiatorSession(destination, sessionId)` before sending `Connect`. Keeping the session in `Pending` state gives the returning `ConnectAck` handler a stable object to find through the `sessionId` carried by the acknowledgement.
 
-The recipient's `Connect` handler reads the pseudonym from the frame and calls `addRecipientSession(sessionId)`. It decodes each public SURB independently, stores the valid SURBs in the session queue, prepares `ConnectAck` and marks the recipient session established before sending the first redundant acknowledgement copy. The initiator can therefore act on an acknowledgement without racing the recipient's state transition.
+The recipient's `Connect` handler reads the pseudonym from the frame and calls `addRecipientSession(sessionId)`. It decodes the first two public SURBs as dedicated response paths, initializes numbered supply, accepts valid suffix entries into the session queue, and prepares `ConnectAck` and marks the recipient session established before sending the first redundant acknowledgement copy. The initiator can therefore act on an acknowledgement without racing the recipient's state transition.
 
 The relevant order is:
 
 ```nim
+var replyBatch = newSeqOfCap[SURB](DefaultReplySurbRedundancy)
+for index in 0 ..< DefaultReplySurbRedundancy:
+  let surb = frame.surbs[index].deserializeSurb().valueOr:
+    return
+  replyBatch.add(surb)
 let session = self.sessions.addRecipientSession(frame.sessionId).valueOr:
+  error "error registering session", error = error
   return
+
 var keepSession = false
 defer:
   if not keepSession:
     discard self.sessions.remove(frame.sessionId)
 
-session.addReceivedSurbs(decodedSurbs).isOkOr:
-  return
-
-var replyBatch = session.takeReceivedSurbs(DefaultReplySurbRedundancy).valueOr:
-  return
-
 session.initializeSurbSupply().isOkOr:
   return
+if frame.surbs.len > DefaultReplySurbRedundancy:
+  let firstSequence = frame.firstSurbSequence.get()
+  for index in DefaultReplySurbRedundancy ..< frame.surbs.len:
+    let surb = frame.surbs[index].deserializeSurb().valueOr:
+      continue
+    let sequence =
+      firstSequence + SurbSupplySequence(index - DefaultReplySurbRedundancy)
+    discard session.acceptSurbSupply(sequence, surb)
 var acknowledgement = MixTransportFrame(
-  version: MixTransportVersion,
-  sessionId: frame.sessionId,
-  kind: FrameKind.ConnectAck,
+  version: MixTransportVersion, sessionId: frame.sessionId, kind: FrameKind.ConnectAck
 )
 session.attachSurbSupplySnapshot(acknowledgement)
 let payload = acknowledgement.encode().valueOr:
   return
 
+# Marks the session as established BEFORE sending out ACKs
+# or the other side might try to use it before it's ready
+# and have its frames dropped.
 session.establish()
 (await self.sendWithSurbRedundancyBatch(replyBatch, payload)).isOkOr:
   return
+
 keepSession = true
 ```
 

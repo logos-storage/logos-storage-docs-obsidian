@@ -1,45 +1,52 @@
 ---
 related:
   - "[[Mix Transport Design Specification]]"
+  - "[[Mix Transport Implementation Walk Through - Reply Credential Store]]"
   - "[[libp2p MIX Architecture and API]]"
-  - "[[Sphinx SURBs implementation in the libp2p MIX protocol]]"
 ---
 
 # Mix Transport - Pluggable Integration Model
 
-## Direction
+## Two layers with separate responsibilities
 
-The new `MixTransport` will be an optional layer built on the stateless Mix API. It will not replace the embedded request/reply implementation during the initial integration.
+MixProtocol provides anonymous packet routing, intentional delays, SURB creation and reply recovery. MixTransport adds sessions and multiplexed application streams to that packet service. It owns the transport frame codec, sequence numbers, flow control, private reply credentials and received public SURBs. [[Mix Transport Design Specification]] defines the resulting protocol.
 
-Without `MixTransport`, existing callers continue to use `toConnection`, the internal `SurbStore`, destination read behaviours and automatic reply recovery exactly as they do today.
+MixProtocol also supports its embedded connection and reply machinery, used by callers such as the legacy DHT proxy. Registering MixTransport does not replace those APIs. Dispatch selects the consumer by service codec for forward deliveries and by reply ownership for SURB replies.
 
-With `MixTransport`, the transport registers a handler for its own service and a raw SURB reply handler. It owns the sessions, virtual connections, framing, credentials and received SURBs described in [[Mix Transport Design Specification]]. Other Mix services continue to use the embedded defaults.
+## Registering forward delivery
 
-## Current Position
+`MixTransport.start` registers a `MixDeliveryHandler` for `/libp2p/mix-transport/1.0.0`. When that service arrives at the destination Mix node, Mix invokes the registered handler with the opaque payload. MixTransport decodes its envelope and routes it by session and stream IDs. A service without such a registration uses Mix's embedded destination handling.
 
-The additive Mix API is mostly present:
+The destination is the final Mix node, not an external peer reached through an exit connection. The transport does not ask Mix to interpret the application codec or perform an application-specific response read. `OpenStream` identifies the application protocol, and MixTransport invokes its mounted libp2p handler with a `TransportStream`.
 
-- `send` sends an opaque payload to a named service;
-- `createSurb` returns a public `SURB` and an opaque `ReplyCredential`;
-- `sendWithSurb` sends an opaque payload through a caller-supplied SURB;
-- `recoverReply` recovers the original payload with a caller-owned credential;
-- service-scoped `MixDeliveryHandler` registration delivers ordinary messages without invoking the embedded exit handling;
-- `RawSurbReplyHandler` registration exposes encrypted replies before embedded credential lookup.
+## Selecting an explicit destination
 
-The embedded transport and its state remain in `MixProtocol` as the compatibility implementation. This is intentional for the migration period and does not change the ownership model of the new transport.
+The address-aware connection API decodes the provider's Mix multiaddress and retains its `MixPubInfo` for that session. Forward sends then supply that destination information directly to Mix:
 
-## Remaining Mix Work
+```nim
+proc sendToDestination(
+    self: MixTransport, destination: PeerId, sessionId: PeerId, payload: sink seq[byte]
+): Future[Result[void, string]] {.async: (raw: true, raises: [CancelledError]).} =
+  self.addressDestinations.withValue(sessionId, info):
+    return self.mix.send(info[], MixTransportCodec, move(payload))
+  self.mix.send(MixDestination.exitNode(destination), MixTransportCodec, move(payload))
+```
 
-The raw-reply handler must report whether it recognized the SURB identifier. When `MixTransport` owns the identifier, it handles the reply and the embedded path must not see it. When the identifier is unknown to `MixTransport`, Mix must try the existing internal `SurbStore`. A simple `Handled` / `Unhandled` result is sufficient. A reply with a recognized identifier but failed recovery is still `Handled`; it must not fall through to unrelated legacy credentials.
+The first branch supplies the final hop independently of the relay pool. The second supports peer-ID-only callers whose destination is resolvable by Mix. Neither branch temporarily modifies libp2p peer-store addresses. Intermediate relays still come from the configured pool. [[Mix Discovery through Provider Records]] explains the advertised destination format.
 
-Exit-equals-destination support should become unconditional rather than depending on `libp2p_mix_experimental_exit_is_dest`. Removing that build flag does not require deleting forward mode or the embedded transport.
+## Creating and consuming reply paths
 
-Before beginning `MixTransport`, add focused integration coverage for the plug-in boundary:
+`createSurb` returns a public SURB and its private `ReplyCredential`. MixTransport retains the credential at the initiator and sends the public SURB to the recipient. The recipient calls `sendWithSurb` to send one reverse copy. At the initiator, `recoverReply` uses the matching private credential to recover the opaque transport frame.
 
-- `send` delivers the exact service and payload to the registered service handler;
-- an unregistered service follows the existing embedded path;
-- a handled raw reply does not reach the embedded store;
-- an unhandled raw reply falls back to the embedded reply machinery;
-- unregistering handlers restores the defaults.
+These operations do not create a persistent redundancy group. MixTransport chooses individual public SURBs for each reverse frame and tracks their private credentials independently. The registered raw-reply callback runs before Mix's embedded credential lookup and returns a `RawSurbReplyDisposition`:
 
-Once those points are complete, the Mix API is ready for the new transport repository. Removing the embedded connection API, internal `SurbStore`, forwarding mode or old tests is not a prerequisite and should be considered separately after the new transport is proven.
+- `Handled`: the reply identifier belongs to an active or retained retired MixTransport credential. Even recovery failure for a recognized identifier stays within this path.
+- `Unhandled`: the identifier is unknown to MixTransport, so Mix may try its embedded reply store.
+
+The recovered frame must identify the session that owns the credential. A valid decryption alone does not authorize delivery to another session. [[Mix Transport Implementation Walk Through - Reply Credential Store]] follows this lookup, consumption and retirement process.
+
+## Startup and shutdown boundary
+
+The application starts the underlying Switch and MixProtocol and mounts its application protocols. It then constructs and starts MixTransport. Consumers that need session lifecycle events subscribe before the transport starts accepting sessions.
+
+MixTransport shutdown cancels connection attempts, detaches sessions, attempts best-effort session reset notifications, unregisters its service and raw-reply handlers, and awaits session cleanup. It does not own the lifetime of the underlying Switch or MixProtocol; their owner stops them separately. Removing the callbacks leaves unrelated Mix consumers on their own dispatch paths.

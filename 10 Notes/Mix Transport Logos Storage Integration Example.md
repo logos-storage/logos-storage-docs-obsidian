@@ -10,7 +10,7 @@ related:
 
 ## Purpose
 
-This note records the original reference integration and its node-wide transport selection. The current per-download implementation supersedes that selection and the peer-ID-only connection examples below; see [[Mix Transport Logos Storage Integration - Download Transport Selection]] for the current code path, and [[Mix Transport Logos Storage Integration Plan]] for remaining work. On 12 September 2026 the integration branch was rebased on master including PR 1526, retaining its address-advertisement setup.
+**Historical reference — node-wide prototype.** This note preserves the original integration example and its validation reports, not the current API or setup instructions. The current implementation is on Storage master and is described in [[Mix Transport Logos Storage Integration - Download Transport Selection]]. The code below intentionally records the earlier design; do not use it as a current integration template.
 
 The `feat/mix-transport` branch in `logos-storage-nim` contains a reference integration of the generic `libp2p_mix_transport` package. The integration uses the existing Storage MixProtocol setup and applies MixTransport to BlockExchange streams and manifest fetching. The existing DHT proxy path is left unchanged in this increment.
 
@@ -156,13 +156,13 @@ After this selection, the existing request encoding, response decoding, CID veri
 
 `StorageServer` owns the MixTransport instance. During shutdown, Storage stops MixTransport while the BlockExchange session handler is still registered. MixTransport publishes `Closed` for each established session, allowing BlockExchange to remove peer state through its normal departure callbacks. Storage detaches BlockExchange and the manifest protocol only after transport shutdown has completed, then stops the underlying Switch and Storage node.
 
-## Current recipient-side reset limitation
+## Recipient-side reset limitation recorded by the prototype
 
 The integration can reset an initiator-side session because `dialPeer` retains the `TransportSession` returned by `connect`. A recipient-side BlockExchange peer is keyed by its anonymous session ID, but the current public MixTransport API does not provide the corresponding `TransportSession` handle or a `resetSession(sessionId)` operation.
 
 When BlockExchange locally drops such a recipient-side peer, the reference implementation removes the BlockExchange state and logs that the underlying MixTransport session could not be reset. Completing this path requires a small generic transport API that resets a registered session by its public session ID. Passing the anonymous ID to `switch.disconnect` would be incorrect because the ID does not identify a physical libp2p connection.
 
-## Verification
+## Historical verification report
 
 The Storage binary builds with `make -j24 NIMFLAGS="-d:disableMarchNative"`. The complete unit suite passes with `make test -j24 NIMFLAGS="-d:disableMarchNative"`.
 
