@@ -16,6 +16,8 @@ The documentation pass checks source definitions, frame validation, routing, sta
 
 ## Document roles
 
+The 28 September specification revision applies an independent-implementation criterion throughout: exact framing and size limits, field presence, state prerequisites, initialization, receive and acknowledgement algorithms, duplicate handling, supply credit, and teardown. It separates protocol constants from local scheduling/defaults and retains explicit reliability boundaries. Its packet calculations and state rules were checked against the baseline above, including Mix dependency 427b090. This was documentation/source review, not a new runtime test or cross-implementation interoperability test. The separate historical Draft was not edited.
+
 - [[Mix Transport Design Specification]] describes the protocol, bounds, failure behavior and local defaults.
 - [[Mix Transport Implementation Walk Through]] indexes current code walkthroughs; these retain contextual snippets rather than implementation chronology.
 - [[Mix Transport Logos Storage Integration - Download Transport Selection]] follows the current Storage consumer. Its repository counterpart is docs/mix-downloads.md.
