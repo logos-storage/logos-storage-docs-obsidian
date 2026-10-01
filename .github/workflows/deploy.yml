@@ -48,7 +48,8 @@ jobs:
       - name: Install Quartz plugins
         run: |
           cd quartz
-          npx quartz plugin install --clean
+          # --clean omits fetching pinned commits after its shallow clones.
+          npx quartz plugin install
 
       # The pinned syntax-highlighting plugin declares Shiki as a peer
       # dependency but does not install it for the plugin's isolated build.
@@ -58,6 +59,9 @@ jobs:
           npm --prefix .quartz/plugins/syntax-highlighting install \
             --no-save --package-lock=false shiki@4.4.3
           npm --prefix .quartz/plugins/syntax-highlighting run build
+
+      - name: Verify Quartz plugins
+        run: node .quartz/verify-plugins.mjs
 
       - name: Patch Quartz SVG asset links
         run: |
