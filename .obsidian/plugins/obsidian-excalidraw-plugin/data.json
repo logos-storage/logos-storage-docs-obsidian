@@ -6,11 +6,18 @@
   "phoneFooterSafeAreaPadding": false,
   "tabletFooterSafeAreaPadding": false,
   "folder": "Excalidraw",
+  "libraryFolderPath": "Excalidraw/Libraries",
+  "libraryFileName": "local-library",
+  "libraryStorageMode": "vault",
+  "libraryMigrationStatus": "not-required",
+  "libraryMigrationSnoozeUntil": 0,
   "cropFolder": "",
   "annotateFolder": "",
   "embedUseExcalidrawFolder": true,
   "templateFilePath": "Excalidraw/Template.excalidraw",
   "scriptFolderPath": "Excalidraw/Scripts",
+  "allowJavaScriptFiles": false,
+  "storeScriptFilesAsJavaScript": false,
   "fontAssetsPath": "Excalidraw/CJK Fonts",
   "loadChineseFonts": false,
   "loadJapaneseFonts": false,
@@ -18,8 +25,6 @@
   "compress": true,
   "decompressForMDView": false,
   "onceOffCompressFlagReset": true,
-  "onceOffGPTVersionReset": true,
-  "autosave": true,
   "autosaveIntervalDesktop": 60000,
   "autosaveIntervalMobile": 30000,
   "drawingFilenamePrefix": "Drawing ",
@@ -57,7 +62,6 @@
   "penModeDoubleTapEraser": true,
   "penModeSingleFingerPanning": true,
   "penModeCrosshairVisible": true,
-  "panWithRightMouseButton": false,
   "renderImageInMarkdownReadingMode": false,
   "renderImageInHoverPreviewForMDNotes": false,
   "renderImageInMarkdownToPDF": true,
@@ -131,9 +135,36 @@
   "mdFontColor": "Black",
   "mdBorderColor": "Black",
   "mdCSS": "",
+  "markdownImageSettings": {
+    "defaults": {
+      "width": 500,
+      "paddingBottom": 10,
+      "fontFamily": "Virgil",
+      "fontColor": "Black",
+      "border": {
+        "enabled": false,
+        "color": "Black"
+      },
+      "css": "",
+      "transclusion": {
+        "enabled": false,
+        "fontFamily": "Cascadia",
+        "fontColor": "Black",
+        "border": {
+          "enabled": false,
+          "color": "Black"
+        },
+        "css": ""
+      }
+    }
+  },
+  "markdownImageDeletionPreference": "ask",
   "scriptEngineSettings": {},
-  "previousRelease": "2.25.3",
+  "autostartScripts": {},
+  "autostartScriptFailures": {},
+  "previousRelease": "2.29.0",
   "showReleaseNotes": true,
+  "useDeclarativeSettings": true,
   "excalidrawMasteryPromoCollapsed": false,
   "compareManifestToPluginVersion": true,
   "showNewVersionNotification": true,
@@ -757,6 +788,7 @@
     }
   },
   "aiDefaultTextModel": "gpt-5-mini",
+  "aiDefaultMultimodalModel": "gpt-5-mini",
   "aiDefaultImageGenerationModel": "gpt-image-1",
   "aiDefaultMaxOutgoingTokens": 0,
   "aiDefaultMaxResponseTokens": 4096,
@@ -1081,5 +1113,8 @@
     "margin": "normal"
   },
   "disableContextMenu": false,
+  "onceOffGPTVersionReset": true,
+  "autosave": true,
+  "panWithRightMouseButton": false,
   "isDebugMode": false
 }
