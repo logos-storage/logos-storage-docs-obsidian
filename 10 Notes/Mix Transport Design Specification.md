@@ -109,104 +109,301 @@ A reverse frame can contain both a message about a stream and information about 
 
 ## 4. Wire Representation
 
-### 4.1 Envelope
+To communicate with another implementation, an endpoint must encode and decode transport frames using the same wire format. This section defines that format: the fields a frame can contain, the combinations required for each operation, and the limits on its encoded size.
+
+Each transport frame identifies the session and the operation being performed, and carries the fields needed for that operation—for example, a stream identifier and application data in a `Data` frame, or SURBs in a `SurbSupply` frame. To send a transport frame, the endpoint encodes its fields as one Protobuf message and passes that message to Mix for delivery.
+
+Section 4.1 defines the common fields, encoding conventions, and shared SURB supply snapshot. Section 4.2 specifies which fields each frame kind uses. Section 4.3 gives the size limits, and Section 4.4 describes how the frame is encapsulated in a Mix message and how individual SURBs are serialized. The subsequent sections define how endpoints process these frames and update session and stream state.
+
+### 4.1 Common fields and encoding
 
 The Mix service identifier `/libp2p/mix-transport/1.0.0` selects this protocol. The `version` field inside each frame identifies its format; this specification defines value `3`. There is no version-negotiation exchange.
 
-Each Mix message payload contains exactly one Protobuf-encoded transport frame. Required envelope fields MUST be present, and `version` MUST be `3`. Unsupported versions, unknown frame-kind values, malformed Protobuf, oversized frames, and invalid combinations of known fields are discarded before frame handling. Discarding a malformed frame does not itself require resetting its session or sending an error response.
+Each Mix message payload contains exactly one Protobuf-encoded transport frame. All frame kinds use the same Protobuf schema. Every frame MUST contain `version` (field 1), `sessionId` (field 2), and `kind` (field 3), and `version` MUST be `3`. The `kind` value identifies the operation carried by the frame and determines which additional fields it contains.
 
-| Field # | Name | Field rule | Protobuf type | Meaning |
-| --- | --- | --- | --- | --- |
-| 1 | `version` | Required | `uint32` (varint) | Transport envelope version |
-| 2 | `sessionId` | Required | `bytes` | Binary `PeerId`, nonempty, at most 39 bytes |
-| 3 | `kind` | Required | `enum` (varint) | Frame kind from Section 4.2 |
-| 4 | `streamId` | Optional | `fixed32` | Nonzero virtual-stream identifier |
-| 5 | `sequence` | Optional | `fixed32` | Data sequence |
-| 6 | `payload` | Optional | `bytes` | Nonempty Data chunk |
-| 7 | `codec` | Optional | `string` | Application protocol, nonempty, at most 255 bytes |
-| 8 | `receiveBase` | Optional | `fixed32` | Data acknowledgement base |
-| 9 | `acknowledgementBitmap` | Optional | `bytes` | Exactly 32 bytes |
-| 10 | `firstSurbSequence` | Optional | `fixed32` | First numbered SURB in this frame |
-| 11 | `surbSupplyReceiveBase` | Optional | `fixed32` | Supply acknowledgement base |
-| 12 | `surbSupplyAcknowledgementBitmap` | Optional | `bytes` | Exactly 32 bytes |
-| 13 | `surbSupplyLimit` | Optional | `fixed32` | Exclusive supply credit limit |
-| 14 | `surbs` | Repeated | `bytes` | Independently serialized SURBs |
-| 15 | `rejectionReason` | Optional | `string` | Diagnostic text, at most 255 bytes |
-| 16 | `finalSequence` | Optional | `fixed32` | Final Data sequence on graceful close |
+The table below lists the three fields required in every frame. Section 4.2 defines each frame kind and its operation-specific fields. Common and operation-specific fields are encoded together in one Protobuf message.
+
+Unsupported versions, unknown frame-kind values, malformed Protobuf, oversized frames, and invalid combinations of known fields are discarded before frame handling. Discarding a malformed frame does not itself require resetting its session or sending an error response.
+
+| Field # | Name | Protobuf type | Meaning |
+| --- | --- | --- | --- |
+| 1 | `version` | `uint32` (varint) | Frame format version |
+| 2 | `sessionId` | `bytes` | Binary `PeerId`, nonempty, at most 39 bytes |
+| 3 | `kind` | `enum` (varint) | Frame kind from Section 4.2 |
+
+#### 4.1.1 Encoding conventions
 
 Protobuf `fixed32` uses little-endian encoding. Optional-field presence is significant: absence is not interchangeable with an explicitly encoded zero. Both bitmaps number bits least-significant-bit first within each byte: offset `i` uses byte `i div 8` and mask `1 << (i mod 8)`.
 
-The Protobuf wire types are 0 for `uint32` and `enum`, 5 for `fixed32`, and 2 for bytes and strings. Each SURB is a separate occurrence of field 14, with its own byte length; SURBs are not concatenated inside a single field. String limits count encoded bytes, not characters. The session identifier is the binary libp2p PeerId representation, not its printable base58 representation.
+The Protobuf wire types are `0` for `uint32` and `enum`, `5` for `fixed32`, and `2` for bytes and strings. Every `bytes` field is length-delimited: its field tag is followed by a varint specifying the byte length of the value, followed by the raw bytes. This length excludes the field tag and the length prefix itself. Strings and embedded messages use the same length-delimited framing. Each SURB is encoded as a separate occurrence of the repeated `bytes` field `surbs` (field 14). Each occurrence contains the Protobuf field tag, followed by a varint specifying the number of SURB bytes, followed by those bytes. Multiple SURBs are encoded by repeating this structure, not by concatenating their bytes into a single field value. String limits count encoded bytes, not characters. The session identifier is the binary libp2p `PeerId` representation, not its printable base58 representation.
 
 Field order does not determine meaning, except that the order of repeated SURB entries determines their supply sequences. Senders MUST emit at most one occurrence of each non-repeated field and MUST NOT use unknown fields to change version-3 semantics. Receivers skip well-formed unknown fields according to their Protobuf wire type. This does not negotiate a protocol extension or waive required-field checks.
 
-### 4.2 Frame kinds and field presence
+#### 4.1.2 Shared field set: SURB supply snapshot
 
-Every frame requires the three envelope fields. A supply snapshot is the indivisible tuple of fields 11–13: if any is present, all three MUST be present.
+A **SURB supply snapshot** reports the recipient's session-wide SURB supply state. It consists of the following three fields, encoded directly in the transport frame. Section 8 defines their interpretation.
 
-| Value | Kind | Required additional fields | Direction and SURBs |
+| Field # | Name | Protobuf type | Meaning |
 | --- | --- | --- | --- |
-| 1 | `Connect` | — | Forward; 2–5 SURBs; first two for response, suffix numbered |
-| 2 | `ConnectAck` | Supply snapshot | Reverse through Connect response SURBs |
-| 3 | `OpenStream` | `streamId`, `codec` | Forward: 2–4 SURBs; reverse: none |
-| 4 | `StreamAck` | `streamId` | Acceptor to opener |
-| 5 | `Data` | `streamId`, `sequence`, `payload` | Either direction; no SURBs |
-| 6 | `Ack` | `streamId`, `receiveBase`, `acknowledgementBitmap` | Either direction; no SURBs |
-| 7 | `CloseStream` | `streamId`, `finalSequence` | Either direction |
-| 8 | `ResetStream` | `streamId` | Either direction |
-| 9 | `Disconnect` | — | Either direction |
-| 10 | `ResetSession` | — | Either direction |
-| 11 | `StreamReject` | `streamId` | Acceptor to opener; optional `rejectionReason` |
-| 12 | `SurbSupply` | `firstSurbSequence` | Forward; 1–5 numbered SURBs |
-| 13 | `SurbStatusProbe` | — | Forward; sender supplies two response SURBs |
-| 14 | `SurbStatus` | Supply snapshot | Reverse through probe response SURBs |
+| 11 | `surbSupplyReceiveBase` | `fixed32` | Supply acknowledgement base |
+| 12 | `surbSupplyAcknowledgementBitmap` | `bytes` | Supply acknowledgement bitmap, exactly 32 bytes |
+| 13 | `surbSupplyLimit` | `fixed32` | Exclusive supply credit limit |
 
-`firstSurbSequence` is also required on `Connect` and forward `OpenStream` when a numbered suffix follows the first two SURBs; otherwise it MUST be absent. Suffix numbering starts after the two unnumbered response entries. In `SurbSupply`, numbering starts with the first entry. A consecutive supply range MUST NOT overflow.
+These fields form one indivisible report: if any is present, all three MUST be present. A partially present snapshot is invalid.
 
-Recipients MUST attach a supply snapshot to ordinary reverse frames: `OpenStream`, `StreamAck`, `StreamReject`, `Data`, `Ack`, `CloseStream`, `ResetStream`, `Disconnect`, and `ResetSession`. Initiators do not attach these snapshots to forward frames. ConnectAck and SurbStatus require a snapshot even for structural validity. For the other eligible kinds, an absent snapshot is tolerated on reception; a partially present snapshot is invalid. Snapshots are forbidden on Connect, SurbSupply, and SurbStatusProbe.
+The recipient MUST include a complete supply snapshot in every reverse `OpenStream`, `StreamAck`, `StreamReject`, `Data`, `Ack`, `CloseStream`, `ResetStream`, `Disconnect`, and `ResetSession` frame. If the snapshot is missing, the initiator still processes the frame's operation, but obtains no supply information from it. A partially present snapshot invalidates the frame.
 
-Other known fields MUST be absent unless assigned to that kind above. The receiver enforces the role-dependent SURB rules for `OpenStream` after session lookup. No frame may contain more than five SURB entries, including entries that fail to decode. Probe reception permits two through five entries and selects the first two decodable SURBs; a conforming sender supplies exactly two. Data payloads and OpenStream codecs must be nonempty; an absent or empty StreamReject reason carries no diagnostic explanation.
+`ConnectAck` and `SurbStatus` require a complete snapshot for processing; the initiator discards either frame if its snapshot is missing or incomplete. Forward frames MUST NOT contain a supply snapshot.
+
+### 4.2 Frame kinds and operation-specific fields
+
+Every frame described below includes the common `version`, `sessionId`, and `kind` fields from Section 4.1. Its `kind` value selects one of the following operations. The values in this index are enum values, not Protobuf field numbers.
+
+| Kind value | Frame kind | Purpose |
+| --- | --- | --- |
+| 1 | `Connect` | Establish a session |
+| 2 | `ConnectAck` | Acknowledge session establishment |
+| 3 | `OpenStream` | Open a stream within a session |
+| 4 | `StreamAck` | Accept a stream |
+| 5 | `Data` | Carry application data |
+| 6 | `Ack` | Acknowledge received data |
+| 7 | `CloseStream` | Close a stream gracefully |
+| 8 | `ResetStream` | Abort a stream |
+| 9 | `Disconnect` | Close a session |
+| 10 | `ResetSession` | Abort a session |
+| 11 | `StreamReject` | Reject a stream-opening request |
+| 12 | `SurbSupply` | Replenish the recipient's SURBs |
+| 13 | `SurbStatusProbe` | Request a SURB supply snapshot |
+| 14 | `SurbStatus` | Respond with a SURB supply snapshot |
+
+Each subsection below lists all permitted operation-specific fields. Other known fields MUST be absent. “Required” and “Optional” refer to the particular frame kind and direction, not to the common Protobuf schema. Snapshot rows refer to the three fields in Section 4.1.2, not to an additional field or nested message.
+
+No frame may contain more than five SURB entries. Lower per-kind limits apply as specified below. Numbered SURBs in a frame receive consecutive sequence numbers starting at `firstSurbSequence`. The sequence number assigned to the last numbered SURB MUST NOT exceed `2^32 − 2`; numbering MUST NOT wrap around to zero. Section 4.5 defines the numeric limits.
+
+#### 4.2.1 `Connect`
+
+Sent forward by the initiator to establish a session (Section 5). The `kind` field MUST have the value `1`.
+
+| Field # | Name | Protobuf type | Presence and constraints |
+| --- | --- | --- | --- |
+| 10 | `firstSurbSequence` | `fixed32` | Required if more than two SURBs are supplied; otherwise MUST be absent |
+| 14 | `surbs` | Repeated `bytes` | Required; 2–5 independently serialized SURBs |
+
+The first two SURBs are reserved for sending `ConnectAck` and have no supply sequence numbers. Any additional SURBs replenish the recipient's session-wide supply. They are assigned consecutive sequence numbers starting at `firstSurbSequence`: the third SURB receives that number, the fourth receives the next number, and so on. For `Connect`, `firstSurbSequence` is zero when these additional SURBs are present. A supply snapshot is forbidden.
+
+> [!todo]
+> Consider removing `firstSurbSequence` from `Connect`: its value is always zero, so it is redundant for this frame kind.
+
+#### 4.2.2 `ConnectAck`
+
+Sent in reverse by the recipient through the dedicated `Connect` response SURBs to acknowledge session establishment (Section 5). The `kind` field MUST have the value `2`.
+
+| Field # | Name            | Protobuf type     | Presence and constraints                                    |
+| ------- | --------------- | ----------------- | ----------------------------------------------------------- |
+| 11–13   | Supply snapshot | See Section 4.1.2 | Required; absence or partial presence invalidates the frame |
+
+No SURBs are carried in this frame.
+
+#### 4.2.3 `OpenStream`
+
+Sent by either endpoint to open a stream for the application protocol named by `codec` (Section 6). The `kind` field MUST have the value `3`.
+
+| Field # | Name | Protobuf type | Presence and constraints |
+| --- | --- | --- | --- |
+| 4 | `streamId` | `fixed32` | Required; nonzero stream identifier |
+| 7 | `codec` | `string` | Required; nonempty application protocol identifier, at most 255 encoded bytes |
+| 10 | `firstSurbSequence` | `fixed32` | Forward: required if more than two SURBs are supplied; otherwise absent. Reverse: forbidden. |
+| 14 | `surbs` | Repeated `bytes` | Forward: required, 2–4 entries. Reverse: forbidden. |
+| 11–13 | Supply snapshot | See Section 4.1.2 | Required when sending reverse; absence tolerated on reception. Forbidden forward. |
+
+**Forward:** the first two SURBs are unnumbered and dedicated to `StreamAck` or `StreamReject`. Any remaining entries are numbered consecutively from `firstSurbSequence`.
+
+**Reverse:** the recipient sends no SURBs and includes a supply snapshot.
+
+#### 4.2.4 `StreamAck`
+
+Sent by the stream acceptor to the opener to accept the requested stream (Section 6). Depending on which endpoint opened the stream, this frame travels forward or reverse. The `kind` field MUST have the value `4`.
+
+| Field # | Name | Protobuf type | Presence and constraints |
+| --- | --- | --- | --- |
+| 4 | `streamId` | `fixed32` | Required; nonzero stream identifier |
+| 11–13 | Supply snapshot | See Section 4.1.2 | Required when sending reverse; absence tolerated on reception. Forbidden forward. |
+
+No SURBs are carried in this frame.
+
+#### 4.2.5 `Data`
+
+Sent in either direction to carry a chunk of application data on a stream (Section 7). The `kind` field MUST have the value `5`.
+
+> [!todo]
+> Consider a larger payload limit for forward `Data` frames, which do not carry a supply snapshot, so that the available space can carry additional application data. The complete encoded frame must still fit within the size limit in Section 4.3.
+
+| Field # | Name            | Protobuf type     | Presence and constraints                                                          |
+| ------- | --------------- | ----------------- | --------------------------------------------------------------------------------- |
+| 4       | `streamId`      | `fixed32`         | Required; nonzero stream identifier                                               |
+| 5       | `sequence`      | `fixed32`         | Required; data sequence satisfying Section 4.5                                    |
+| 6       | `payload`       | `bytes`           | Required; nonempty application-data chunk, at most 3,835 bytes                    |
+| 11–13   | Supply snapshot | See Section 4.1.2 | Required when sending reverse; absence tolerated on reception. Forbidden forward. |
+
+No SURBs are carried in this frame.
+
+#### 4.2.6 `Ack`
+
+Sent in either direction to acknowledge data received on a stream (Section 7.3). The `kind` field MUST have the value `6`.
+
+| Field # | Name | Protobuf type | Presence and constraints |
+| --- | --- | --- | --- |
+| 4 | `streamId` | `fixed32` | Required; nonzero stream identifier |
+| 8 | `receiveBase` | `fixed32` | Required; data acknowledgement base |
+| 9 | `acknowledgementBitmap` | `bytes` | Required; exactly 32 bytes |
+| 11–13 | Supply snapshot | See Section 4.1.2 | Required when sending reverse; absence tolerated on reception. Forbidden forward. |
+
+The base and bitmap describe the acknowledged data sequences according to Section 7.3. No SURBs are carried in this frame.
+
+#### 4.2.7 `CloseStream`
+
+Sent in either direction to close a stream gracefully. The `kind` field MUST have the value `7`.
+
+| Field # | Name | Protobuf type | Presence and constraints |
+| --- | --- | --- | --- |
+| 4 | `streamId` | `fixed32` | Required; nonzero stream identifier |
+| 16 | `finalSequence` | `fixed32` | Required; final data sequence, with numeric limits defined in Section 4.5 |
+| 11–13 | Supply snapshot | See Section 4.1.2 | Required when sending reverse; absence tolerated on reception. Forbidden forward. |
+
+No SURBs are carried in this frame.
+
+#### 4.2.8 `ResetStream`
+
+Sent in either direction to abort a stream. The `kind` field MUST have the value `8`.
+
+| Field # | Name | Protobuf type | Presence and constraints |
+| --- | --- | --- | --- |
+| 4 | `streamId` | `fixed32` | Required; nonzero stream identifier |
+| 11–13 | Supply snapshot | See Section 4.1.2 | Required when sending reverse; absence tolerated on reception. Forbidden forward. |
+
+No SURBs are carried in this frame.
+
+#### 4.2.9 `Disconnect`
+
+Sent in either direction to close a session. The `kind` field MUST have the value `9`.
+
+| Field # | Name | Protobuf type | Presence and constraints |
+| --- | --- | --- | --- |
+| 11–13 | Supply snapshot | See Section 4.1.2 | Required when sending reverse; absence tolerated on reception. Forbidden forward. |
+
+There are no operation-specific fields in the forward direction. In reverse, the frame carries the supply snapshot. No stream identifier or SURBs are carried.
+
+#### 4.2.10 `ResetSession`
+
+Sent in either direction to abort a session. The `kind` field MUST have the value `10`.
+
+| Field # | Name | Protobuf type | Presence and constraints |
+| --- | --- | --- | --- |
+| 11–13 | Supply snapshot | See Section 4.1.2 | Required when sending reverse; absence tolerated on reception. Forbidden forward. |
+
+There are no operation-specific fields in the forward direction. In reverse, the frame carries the supply snapshot. No stream identifier or SURBs are carried.
+
+#### 4.2.11 `StreamReject`
+
+Sent by the stream acceptor to the opener to reject a stream-opening request (Section 6). Depending on which endpoint opened the stream, this frame travels forward or reverse. The `kind` field MUST have the value `11`.
+
+| Field # | Name | Protobuf type | Presence and constraints |
+| --- | --- | --- | --- |
+| 4 | `streamId` | `fixed32` | Required; nonzero stream identifier |
+| 15 | `rejectionReason` | `string` | Optional; diagnostic text, at most 255 encoded bytes |
+| 11–13 | Supply snapshot | See Section 4.1.2 | Required when sending reverse; absence tolerated on reception. Forbidden forward. |
+
+An absent or empty `rejectionReason` carries no diagnostic explanation. No SURBs are carried in this frame.
+
+#### 4.2.12 `SurbSupply`
+
+Sent forward by the initiator to replenish the recipient's session-wide SURB supply (Section 8). The `kind` field MUST have the value `12`.
+
+| Field # | Name | Protobuf type | Presence and constraints |
+| --- | --- | --- | --- |
+| 10 | `firstSurbSequence` | `fixed32` | Required; supply sequence of the first SURB entry |
+| 14 | `surbs` | Repeated `bytes` | Required; 1–5 independently serialized, numbered SURBs |
+
+Numbering starts with the first entry and increases consecutively. Unlike `Connect` and forward `OpenStream`, there are no dedicated unnumbered response entries. A supply snapshot is forbidden.
+
+#### 4.2.13 `SurbStatusProbe`
+
+Sent forward by the initiator to request a supply snapshot (Section 8). The `kind` field MUST have the value `13`.
+
+| Field # | Name | Protobuf type | Presence and constraints |
+| --- | --- | --- | --- |
+| 14 | `surbs` | Repeated `bytes` | Required; a conforming sender supplies exactly two response SURBs |
+
+The SURBs are unnumbered and dedicated to the `SurbStatus` response. On reception, two through five entries are permitted, and the recipient selects the first two decodable SURBs. `firstSurbSequence` and supply snapshots are forbidden.
+
+#### 4.2.14 `SurbStatus`
+
+Sent in reverse by the recipient through the probe's response SURBs to report its supply state (Section 8). The `kind` field MUST have the value `14`.
+
+| Field # | Name | Protobuf type | Presence and constraints |
+| --- | --- | --- | --- |
+| 11–13 | Supply snapshot | See Section 4.1.2 | Required; absence or partial presence invalidates the frame |
+
+No SURBs are carried in this frame.
 
 ### 4.3 Packet-size bounds
 
-Version 3 uses the following limits in both directions:
+Version 3 of the protocol uses the following limits in both directions:
 
-| Item | Maximum / exact size |
-| --- | --- |
-| Complete encoded transport frame | 3,937 bytes maximum |
-| Data payload | 3,835 bytes maximum |
-| Serialized SURB | 734 bytes exactly |
-| Connect SURBs | 5 entries maximum |
-| OpenStream SURBs | 4 entries maximum |
-| SurbSupply SURBs | 5 entries maximum |
+| Item                             | Maximum / exact size |
+| -------------------------------- | -------------------- |
+| Complete encoded transport frame | 3,937 bytes maximum  |
+| Data payload                     | 3,835 bytes maximum  |
+| Serialized SURB                  | 734 bytes exactly    |
+| Connect SURBs                    | 5 entries maximum    |
+| OpenStream SURBs                 | 4 entries maximum    |
+| SurbSupply SURBs                 | 5 entries maximum    |
 
-The Data bound reserves 102 bytes for the largest envelope, including a 39-byte session identifier and a complete reverse supply snapshot. A shorter identifier, absent snapshot, or empty reverse service codec MUST NOT be used to enlarge the Data payload beyond this bound. The complete frame must also satisfy its size limit independently.
+The Data payload limit reserves 102 bytes for the remaining fields and Protobuf framing, including a 39-byte session identifier and a complete reverse supply snapshot. A shorter identifier, absent snapshot, or empty reverse service codec MUST NOT be used to enlarge the Data payload beyond this bound. The complete frame must also satisfy its size limit independently.
 
-These bounds use Mix's 4,608-byte packet profile: a 624-byte Sphinx header, 16 bytes of payload padding, and a 2-byte message-padding length leave 3,966 bytes for an unpadded Mix message. Forward service framing takes 28 bytes (one length byte and the 27-byte service identifier). The transport frame limit leaves one further byte unused. That byte is a conservative capacity allowance, not an extra byte to transmit. This version does not negotiate different packet sizes.
+These bounds use the 4,608-byte packet size recommended in the [Mix Protocol specification, Section 8.3.2](https://lip.logos.co/anoncomms/raw/mix.html#832-payload-size). The [624-byte Sphinx header](https://lip.logos.co/anoncomms/raw/mix.html#831-header-field-sizes), 16-byte payload integrity prefix, and 2-byte message-padding length leave up to 3,966 bytes for the protocol identifier, its length prefix, and the encoded transport frame. Mix fills any unused space with padding.
 
-Connect can carry three numbered SURBs after its two response entries; OpenStream can carry two. The OpenStream bound accommodates the maximum application-codec length. A shorter codec does not increase the entry limit.
+For forward delivery, Mix prefixes the encoded transport frame with `/libp2p/mix-transport/1.0.0`, the protocol identifier used to select the Mix Transport handler at the destination. This identifier occupies 27 bytes, preceded by a one-byte `varint` encoding its length, for a total of 28 bytes. The transport frame limit leaves one further byte unused. That byte is a conservative capacity allowance, not an extra byte to transmit. This version does not negotiate different packet sizes.
 
-The decoder validates frame structure without requiring every SURB to deserialize successfully. Numbered entries are decoded independently so a bad entry does not discard valid neighbors. This does not relax the requirement for a usable dedicated handshake response batch.
+`Connect` can carry three numbered SURBs after its two response entries; forward `OpenStream` can carry two. An `OpenStream` frame can carry at most four SURBs so that the frame still fits within the size limit when its `codec` field contains 255 bytes. A shorter `codec` does not increase the permitted number of SURBs.
+
+The decoder validates frame structure without requiring every SURB to deserialize successfully. Numbered entries are decoded independently so a bad entry does not discard valid neighbors. For `Connect` and forward `OpenStream`, both of the first two SURBs - reserved for the response - must decode successfully. Otherwise, the receiver discards the frame.
 
 ### 4.4 Encapsulation and SURB representation
 
-After Mix removes its message padding, the message is `uvarint(codecByteLength) || codecBytes || frameBytes`. Forward messages use the service identifier in Section 3.1.1; its prefix is hexadecimal `1b`. Reverse messages use an empty codec, so their prefix is hexadecimal `00`. No transport-frame length follows the codec. Mix message padding and Sphinx processing are lower-layer operations, not fields in the transport envelope.
+After Mix removes its message padding, the message is `uvarint(codecByteLength) || codecBytes || frameBytes`. Here, `codecBytes` contains the protocol identifier described in Section 4.3, and `codecByteLength` is its length in bytes. `frameBytes` contains the Protobuf-encoded transport frame.
+
+For forward messages, the protocol identifier is `/libp2p/mix-transport/1.0.0`: `codecByteLength` is exactly 27, encoded as the single byte hexadecimal `1b`. For reverse messages, the identifier is empty: `codecByteLength` is zero, encoded as hexadecimal `00`, and `frameBytes` follows immediately. These lengths describe this protocol's use of Mix framing, not a general maximum length for Mix protocol identifiers.
+
+Mix uses length-prefixed protocol identifiers to support delivery to different protocols, whose identifiers can have different lengths. Mix Transport uses this framing even though its forward identifier is fixed. This identifier is distinct from the application-protocol `codec` field inside an `OpenStream` frame.
+
+No transport-frame length follows the protocol identifier. Mix message padding and Sphinx processing are lower-layer operations, not fields in the transport frame.
 
 A SURB in field 14 is serialized as the following concatenation, without an additional SURB count or group identifier:
 
-| Offset | Length | Mix component |
-| --- | --- | --- |
-| 0 | 94 | First-hop address in Mix's fixed-width address representation |
-| 94 | 32 | Sphinx header Alpha |
-| 126 | 576 | Sphinx header Beta |
-| 702 | 16 | Sphinx header Gamma |
-| 718 | 16 | SURB payload-encryption key |
+| Offset | Length | Mix component                                                 |
+| ------ | ------ | ------------------------------------------------------------- |
+| 0      | 94     | First-hop address in Mix's fixed-width address representation |
+| 94     | 32     | Sphinx header Alpha                                           |
+| 126    | 576    | Sphinx header Beta                                            |
+| 702    | 16     | Sphinx header Gamma                                           |
+| 718    | 16     | SURB payload-encryption key                                   |
 
-The address, header, and key are produced and interpreted by the Mix SURB mechanism. The SURB key in this serialization is not the initiator's entire reply credential. The initiator retains the additional recovery material needed by Mix and associates it with the session. Transport does not append a session ID, supply sequence, or credential to these 734 bytes; those associations are carried by the transport envelope or kept locally.
+The address, header, and key are produced and interpreted by the Mix SURB mechanism. The SURB key in this serialization is not the initiator's entire reply credential.
+
+The 734-byte SURB serialization contains no session ID, supply sequence number, or initiator reply credential. The enclosing transport frame identifies the session through `sessionId`. For numbered SURBs, sequence numbers are derived from `firstSurbSequence` and their order among the numbered entries. The initiator retains the corresponding reply credentials locally.
 
 ### 4.5 Numeric validity
 
-Stream ID zero is invalid. Data sequence zero and `2^32 − 1` are invalid; finalSequence permits zero but not `2^32 − 1`. Supply sequences permit zero and end at `2^32 − 2`. Receive bases and exclusive limits may reach `2^32 − 1` to describe exhausted sequence space. All range arithmetic MUST avoid unsigned wraparound. A supply frame whose first sequence plus its numbered entry count minus one exceeds `2^32 − 2` is invalid as a whole.
+Stream IDs MUST be nonzero.
+
+`Data` frames are numbered starting at one. Their highest permitted sequence number is `2^32 − 2`, leaving `2^32 − 1` available for the receive base to indicate that every usable sequence number has been received.
+
+If an endpoint sends a `CloseStream` frame without having sent any `Data` frames on that stream, it MUST set `finalSequence` to zero. Otherwise, `finalSequence` identifies the last `Data` sequence it sent on that stream.
+
+Numbered SURBs use a separate sequence space starting at zero. Their highest permitted sequence number is also `2^32 − 2`, leaving `2^32 − 1` available for the supply receive base to indicate that every usable supply sequence has been received. An exclusive supply limit may reach `2^32 − 1` to permit the last usable supply sequence, `2^32 − 2`.
+
+All range arithmetic MUST avoid unsigned wraparound. For a frame carrying numbered SURBs, the last assigned sequence is `firstSurbSequence + numberedEntryCount − 1`. If this exceeds `2^32 − 2`, the receiver MUST reject the entire frame. The receiver MUST check this bound without allowing the calculation itself to wrap around to a smaller value.
 
 Structural validity alone does not grant credit. The session or stream state determines whether a numerically valid sequence or snapshot is admissible. In particular, Data ACK bases must satisfy Section 7.3 and supply snapshots must satisfy Section 8.2.
 
@@ -294,7 +491,7 @@ For example, `receiveBase=4` and bitmap byte 0 equal to hexadecimal `02` acknowl
 
 ### 7.4 Retransmission and reliability limits
 
-Data retransmission is enabled by default and can be disabled locally. Each retained chunk becomes eligible for retry after a local interval measured from completion of its previous send attempt. It is not simultaneously eligible while that attempt is in progress. A retry uses the same sequence and payload; a reverse retry uses fresh SURBs and a current supply snapshot, so the complete envelope need not be identical to the earlier transmission.
+Data retransmission is enabled by default and can be disabled locally. Each retained chunk becomes eligible for retry after a local interval measured from completion of its previous send attempt. It is not simultaneously eligible while that attempt is in progress. A retry uses the same sequence and payload; a reverse retry uses fresh SURBs and a current supply snapshot, so the complete encoded frame need not be identical to the earlier transmission.
 
 Before retrying, the sender checks that the chunk remains unacknowledged. ACK processing may remove it while its retry is being submitted. Completion of that submission MUST NOT restore it to the retained set. Different chunks may have different deadlines; choosing which due chunk to send is a local scheduling decision. No retransmission flag or attempt number is transmitted.
 
